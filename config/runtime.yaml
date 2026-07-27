@@ -1,0 +1,55 @@
+# ============================================================
+# runtime.yaml · 运行预算与浏览器运行方式
+# ============================================================
+# 重要声明：
+#   - 这些数值仅为保守的开发默认值，用于控制负载与防止程序失控
+#   - 不代表"安全阈值"，不得在代码或文档中宣称"不会封号"
+#   - 不能保证账号不受限制
+#   - headless 必须为 false（强制可见浏览器）
+#   - single_context 必须为 true
+#   - single_account 必须为 true
+#   - allow_unattended 必须为 false
+#   - allow_background 必须为 false
+# =================================================================
+
+budget:
+  # 每个关键词最多搜索页数
+  max_search_pages_per_keyword: 1
+  # 本次运行最多访问详情页数
+  max_job_details_per_run: 10
+  # 本次运行最多访问页面总数
+  max_total_pages_per_run: 20
+  # 本次运行最长时长（分钟）
+  max_runtime_minutes: 20
+  # 本次运行最多错误数
+  max_errors_per_run: 3
+  # 连续解析失败上限
+  max_consecutive_parse_failures: 2
+
+page_interval:
+  # 页面间最短停顿秒数
+  min_seconds: 8
+  # 页面间最长停顿秒数
+  max_seconds: 15
+
+revisit:
+  # 同岗位详情页重访问冷却小时数
+  cooldown_hours: 24
+
+browser:
+  # 持久化用户目录（仅使用用户本人登录生成的本地目录）
+  user_data_dir: "./user_data"
+  # 必须为 false，强制可见浏览器
+  headless: false
+  # 必须为 true，单浏览器上下文
+  single_context: true
+  # 必须为 true，单账号
+  single_account: true
+
+run_control:
+  # 必须为 true，人工确认后启动
+  require_user_confirm: true
+  # 必须为 false，不得无人值守
+  allow_unattended: false
+  # 必须为 false，不得后台静默
+  allow_background: false

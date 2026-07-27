@@ -1,0 +1,112 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "boss-tool"
+version = "0.1.0"
+description = "BOSS直聘岗位辅助采集与筛选工具 - P0 项目骨架"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Proprietary" }
+authors = [
+    { name = "boss-tool" }
+]
+dependencies = [
+    "PyYAML>=6.0",
+    "pydantic>=2.5",
+    "typer>=0.9",
+    "openpyxl>=3.1",
+    # playwright 仅声明依赖，P0 阶段不得用于访问真实网站
+    "playwright>=1.40",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.4",
+    "pytest-cov>=4.1",
+    "ruff>=0.1",
+    "black>=23.0",
+]
+
+[project.scripts]
+boss-tool = "boss_tool.cli:app"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+boss_tool = ["py.typed"]
+
+# ==================== pytest ====================
+[tool.pytest.ini_options]
+minversion = "7.0"
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = [
+    "-ra",
+    "--strict-markers",
+    "--strict-config",
+]
+markers = [
+    "slow: 标记较慢的测试",
+]
+
+# ==================== coverage ====================
+[tool.coverage.run]
+source = ["src/boss_tool"]
+branch = true
+omit = [
+    "*/__main__.py",
+    "*/tests/*",
+]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+    "if TYPE_CHECKING:",
+]
+show_missing = true
+skip_covered = false
+
+# ==================== ruff ====================
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+extend-exclude = ["user_data", "logs", "output", "data"]
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes
+    "I",   # isort
+    "B",   # flake8-bugbear
+    "UP",  # pyupgrade
+    "C4",  # flake8-comprehensions
+    "SIM", # flake8-simplify
+    "RET", # flake8-return
+    "PT",  # flake8-pytest-style
+]
+ignore = [
+    "E501",  # 行长度交给 black 处理
+    "B008",  # typer 默认参数常用
+    "RET504", # 允许 return 后再赋值
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["B017"]  # 测试允许 Exception 通用匹配
+"src/boss_tool/cli.py" = ["B008"]  # typer Option 默认参数
+
+[tool.ruff.lint.isort]
+known-first-party = ["boss_tool"]
+
+# ==================== black ====================
+[tool.black]
+line-length = 100
+target-version = ["py310"]
+extend-exclude = "/(user_data|logs|output|data)/"

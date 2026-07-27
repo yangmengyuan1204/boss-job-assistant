@@ -1,0 +1,44 @@
+# ============================================================
+# app.yaml · 应用级总配置
+# ============================================================
+# 注意：
+# - 本文件不含任何敏感信息（API key 仅通过环境变量注入）
+# - 所有 max_* 配置仅为保守开发默认值，不代表"安全阈值"
+# =================================================================
+
+app:
+  name: "boss-tool"
+  version: "0.1.0"
+  # 数据目录、日志目录、输出目录均为相对路径，可被 CLI --config 覆盖
+  data_dir: "./data"
+  logs_dir: "./logs"
+  output_dir: "./output"
+  user_data_dir: "./user_data"
+
+database:
+  # SQLite 文件路径（相对 data_dir）
+  sqlite_path: "boss_tool.db"
+  # 启动时打开 PRAGMA foreign_keys
+  foreign_keys: true
+  # 初始化失败是否抛出异常（doctor 中可关闭）
+  strict_init: true
+
+logging:
+  level: "INFO"
+  # 控制台日志开关
+  console_enabled: true
+  # 文件日志开关
+  file_enabled: true
+  # 文件日志路径（相对 logs_dir）
+  file_name: "boss_tool.log"
+  # 单文件最大字节数
+  max_bytes: 5242880  # 5MB
+  # 保留备份数
+  backup_count: 3
+  # 日志格式
+  format: "%(asctime)s | %(levelname)-8s | %(name)s | %(message)s"
+  date_format: "%Y-%m-%d %H:%M:%S"
+
+# 求职者信息（可被 keywords.yaml/locations.yaml 覆盖关键项）
+candidate:
+  age: 60

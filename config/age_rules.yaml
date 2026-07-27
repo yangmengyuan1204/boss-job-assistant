@@ -1,0 +1,146 @@
+# ============================================================
+# age_rules.yaml · 年龄目标分类规则
+# ============================================================
+# 注意：本文件仅声明规则集结构与开发默认值。
+# 真实规则需在 P2 fixture 采集后完善。
+# 禁止假设 BOSS 页面具体文案。
+# =================================================================
+
+candidate:
+  age: 60
+
+# 规则集结构示例（仅声明结构，实际匹配由 P3 解析器实现）
+rules:
+  # 1. exact_65_cap = 明确 65 岁以下（最高优先）
+  - id: "R-EXACT-65-CAP"
+    pattern: '65\s*(?:岁|周岁)?\s*(?:以下|以内)'
+    category: "exact_65_cap"
+    boundary_risk: "none"
+    confidence: "high"
+    description: "65 岁以下 / 65 周岁以下 / 65 岁以内"
+
+  - id: "R-EXACT-65-NO-MORE"
+    pattern: '不超过\s*65\s*岁'
+    category: "exact_65_cap"
+    boundary_risk: "none"
+    confidence: "high"
+    description: "不超过 65 岁"
+
+  - id: "R-EXACT-65-MAX"
+    pattern: '(?:最高|上限|年龄上限)\s*(?:为)?\s*65\s*岁'
+    category: "exact_65_cap"
+    boundary_risk: "none"
+    confidence: "high"
+    description: "最高 65 岁 / 上限 65 岁 / 年龄上限为 65 岁"
+
+  # 2. range_includes_60_to_65 = 区间含 60 上限 65
+  - id: "R-RANGE-TO-65"
+    pattern: '(?:18|20|25|30|35|40|45|50|55)\s*[-~至]\s*65\s*岁'
+    category: "range_includes_60_to_65"
+    boundary_risk: "low"
+    confidence: "high"
+    description: "18-65 岁 / 50-65 岁 / 55-65 岁"
+
+  - id: "R-RANGE-60-65"
+    pattern: '60\s*[-~至]\s*65\s*岁'
+    category: "range_includes_60_to_65"
+    boundary_risk: "low"
+    confidence: "high"
+    description: "60-65 岁"
+
+  # 3. alternative_accepts_60 = 理论接受 60（次级）
+  - id: "R-UNLIMITED"
+    pattern: '年龄不限|不限年龄|无年龄要求'
+    category: "alternative_accepts_60"
+    boundary_risk: "low"
+    confidence: "medium"
+    description: "年龄不限"
+
+  - id: "R-RETIREE"
+    pattern: '退休(?:人员|工人)?(?:可|可以|欢迎)'
+    category: "alternative_accepts_60"
+    boundary_risk: "low"
+    confidence: "medium"
+    description: "退休人员可做"
+
+  - id: "R-UPPER-66-70"
+    pattern: '(?:66|67|68|69|70)\s*岁\s*(?:以下|以内)'
+    category: "alternative_accepts_60"
+    boundary_risk: "low"
+    confidence: "medium"
+    description: "上限 66-70 岁"
+
+  # 4. boundary_60 = 60 岁边界（人工复核，不进最高优先）
+  #    【v0.3 关键修复】边界规则不得包含"以下"
+  - id: "R-BOUNDARY-60-WITHIN"
+    pattern: '60\s*岁\s*以内'
+    category: "boundary_60"
+    boundary_risk: "high"
+    confidence: "medium"
+    description: "60 岁以内（边界风险高，需复核）"
+
+  - id: "R-BOUNDARY-60-NO-MORE"
+    pattern: '不超过\s*60\s*岁'
+    category: "boundary_60"
+    boundary_risk: "high"
+    confidence: "medium"
+    description: "不超过 60 岁"
+
+  - id: "R-BOUNDARY-60-MAX"
+    pattern: '(?:最高|上限|年龄上限)\s*(?:为)?\s*60\s*岁'
+    category: "boundary_60"
+    boundary_risk: "high"
+    confidence: "medium"
+    description: "最高 60 岁 / 上限 60 岁"
+
+  # 5. no_explicit_age = 无明确年龄（人工复核）
+  - id: "R-OLDER-PRIORITY-ONLY"
+    pattern: '大龄人员(?:优先|可做|欢迎)'
+    category: "no_explicit_age"
+    boundary_risk: "medium"
+    confidence: "low"
+    description: "仅大龄人员优先/可做但无具体年龄"
+
+  - id: "R-VAGUE-HEALTH"
+    pattern: '身体健康即可|吃苦耐劳'
+    category: "no_explicit_age"
+    boundary_risk: "medium"
+    confidence: "low"
+    description: "仅健康/吃苦耐劳，无年龄"
+
+  # 6. rejects_60 = 明确排除已满 60 岁
+  #    【v0.3 关键修复】"60 岁以下"只属 rejects_60，不得进 boundary_60
+  - id: "R-REJECT-60-BELOW"
+    pattern: '60\s*岁以下'
+    category: "rejects_60"
+    boundary_risk: "none"
+    confidence: "high"
+    description: "60 岁以下（排除已满 60 岁）"
+
+  - id: "R-REJECT-59"
+    pattern: '59\s*岁以下'
+    category: "rejects_60"
+    boundary_risk: "none"
+    confidence: "high"
+    description: "59 岁以下"
+
+  - id: "R-REJECT-58"
+    pattern: '58\s*岁以下'
+    category: "rejects_60"
+    boundary_risk: "none"
+    confidence: "high"
+    description: "58 岁以下"
+
+  - id: "R-REJECT-55"
+    pattern: '55\s*岁以下'
+    category: "rejects_60"
+    boundary_risk: "none"
+    confidence: "high"
+    description: "55 岁以下"
+
+  - id: "R-REJECT-RANGE-CAP-BELOW-60"
+    pattern: '\d+\s*[-~至]\s*(?:35|40|45|50|55|58|59)\s*岁'
+    category: "rejects_60"
+    boundary_risk: "none"
+    confidence: "high"
+    description: "区间上限低于 60"

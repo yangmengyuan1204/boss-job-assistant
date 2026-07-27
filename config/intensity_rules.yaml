@@ -1,0 +1,90 @@
+# ============================================================
+# intensity_rules.yaml · 劳动强度规则
+# ============================================================
+# 注意：仅声明规则结构，真实规则由 P3 解析器实现。
+# 必须保留命中的原始描述。
+# =================================================================
+
+# 优先线索（命中 → 倾向 low / medium）
+prefer:
+  - id: "PI-SIT"
+    pattern: '坐岗|坐班|可坐'
+    field: "sitting_allowed"
+    description: "允许坐岗"
+
+  - id: "PI-FIXED-POST"
+    pattern: '门岗|固定岗|固定岗位'
+    field: "work_area_text"
+    description: "固定岗位，少走动"
+
+  - id: "PI-MONITOR"
+    pattern: '监控室|监控岗'
+    field: "work_area_text"
+    description: "室内监控"
+
+  - id: "PI-REGISTER"
+    pattern: '登记|访客登记|简单登记'
+    field: "work_area_text"
+    description: "登记访客等轻量工作"
+
+  - id: "PI-OFFICE-CLEAN"
+    pattern: '办公室保洁|写字楼保洁'
+    field: "work_area_text"
+    description: "室内、面积小、环境好"
+
+# 排除线索（命中 → 倾向 high / unsuitable）
+exclude:
+  - id: "EX-LIFT"
+    pattern: '搬运|装卸|扛重物|搬重'
+    field: "lifting_required"
+    description: "重体力搬运"
+
+  - id: "EX-GARBAGE"
+    pattern: '垃圾清运|推垃圾车|垃圾转运'
+    field: "garbage_transport_required"
+    description: "垃圾清运"
+
+  - id: "EX-RENOVATE-CLEAN"
+    pattern: '开荒保洁|开荒清洁'
+    field: "work_area_text"
+    description: "高强度清理"
+
+  - id: "EX-STAIR"
+    pattern: '爬楼|爬楼梯|多层楼'
+    field: "stair_climbing_required"
+    description: "多层爬楼"
+
+  - id: "EX-STAND-LONG"
+    pattern: '长时间站立|连续站立|长期站立'
+    field: "prolonged_standing"
+    description: "长时间站立"
+
+  - id: "EX-PATROL-HIGH"
+    pattern: '频繁巡逻|高频巡逻|多区域巡逻'
+    field: "patrol_required"
+    description: "高频巡逻"
+
+  - id: "EX-OUTDOOR"
+    pattern: '户外作业|户外工作|室外作业'
+    field: "outdoor_work"
+    description: "户外作业"
+
+  - id: "EX-HIGH-TEMP"
+    pattern: '高温|暴晒|室外高温'
+    field: "high_temperature_exposure"
+    description: "高温暴晒"
+
+  - id: "EX-NIGHT-PATROL"
+    pattern: '夜间巡逻|夜班巡逻|夜巡'
+    field: "night_shift_required"
+    description: "夜间高强度巡逻"
+
+# 优先推荐准入：medium 进入优先推荐的 7 项条件（详见设计稿 8.3）
+top_recommend_conditions:
+  - "lifting_required != true"
+  - "garbage_transport_required != true"
+  - "stair_climbing_required != true"
+  - "high_temperature_exposure != true"
+  - "prolonged_standing != true"
+  - "no_continuous_12h_standing"
+  - "no_night_high_intensity_patrol"

@@ -1,0 +1,2 @@
+# 占位文件，确保 data/ 目录进入 Git
+# 注意：SQLite 数据库文件不被提交（见 .gitignore）

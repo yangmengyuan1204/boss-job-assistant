@@ -1,0 +1,77 @@
+# Python
+.venv/
+venv/
+env/
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg
+*.egg-info/
+.eggs/
+build/
+dist/
+develop-eggs/
+downloads/
+parts/
+sdist/
+wheels/
+share/python-wheels/
+*.whl
+MANIFEST
+
+# Testing & coverage
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+*.cover
+.hypothesis/
+.tox/
+.nox/
+
+# Environment
+.env
+.env.*
+!.env.example
+.python-version
+pip-log.txt
+pip-delete-this-directory.txt
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Playwright auth (禁止提交任何登录信息)
+playwright/.auth/
+
+# 运行时目录（保留 .gitkeep）
+user_data/*
+!user_data/.gitkeep
+
+logs/*
+!logs/.gitkeep
+
+output/*
+!output/.gitkeep
+
+# 数据库文件
+data/*.db
+data/*.sqlite
+data/*.sqlite3
+data/*.db-journal
+data/*.db-wal
+data/*.db-shm
+
+# 临时文件
+*.tmp
+*.bak
+*.log

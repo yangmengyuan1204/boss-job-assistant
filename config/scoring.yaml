@@ -1,0 +1,90 @@
+# ============================================================
+# scoring.yaml · 评分权重与排序优先级
+# ============================================================
+# 评分用于排序与重点岗位标记，不影响硬性排除。
+# 权重总和必须等于 100。
+# =================================================================
+
+candidate:
+  age: 60
+
+# 评分权重（总和必须 = 100）
+weights:
+  age_match: 30
+  physical_intensity: 25
+  distance: 15
+  activity_and_state: 15
+  shift_and_hours: 10
+  salary: 5
+  # 总和 = 30 + 25 + 15 + 15 + 10 + 5 = 100
+
+# 年龄目标评分（v0.3 细化）
+age_target_scores:
+  exact_65_cap: 30
+  range_includes_60_to_65: 30
+  alternative_retiree: 24        # 退休人员可做
+  alternative_unlimited: 22      # 年龄不限
+  alternative_upper_66_70: 20     # 上限 66-70
+  boundary_60: 8                 # 强制人工复核
+  no_explicit_age: 0             # 人工复核
+  rejects_60: 0                  # 硬性排除
+
+# 劳动强度评分区间
+intensity_bands:
+  - { category: "low",                       qualifies_top: true,  score: 25 }
+  - { category: "medium", qualifies_top: true,                       score: 18 }
+  - { category: "medium", qualifies_top: false,                      score: 12 }
+  - { category: "unknown",                                           score: 12 }
+  - { category: "high",                                              score: 8  }
+  - { category: "unsuitable",                                        score: 0  }
+
+# 距离评分区间
+distance_bands:
+  - { max_m: 500,  score: 15 }
+  - { max_m: 1000, score: 12 }
+  - { max_m: 2000, score: 8  }
+  - { max_m: 3000, score: 4  }
+  - { max_m: null, score: 0  }
+
+# 招聘活跃与岗位状态评分
+activity_state_scores:
+  confirmed_active_3d: 15
+  likely_active_this_week: 10
+  uncertain_active_3d: 12
+  uncertain_unknown: 8
+  long_ago: 4
+  closed: 0
+
+# 班次工时休息评分
+shift_hours_scores:
+  day_reasonable_clear_rest: 10
+  rotating_reasonable: 6
+  night_shift: 3
+  missing: 5
+
+# 薪资评分
+salary_scores:
+  full_range: 5
+  single_value: 3
+  missing: 0
+
+# 优先推荐排序优先级（v0.3）
+top_recommend_sort_keys:
+  - "age_target_category_rank"   # exact_65_cap=1, range=2, alternative=3
+  - "distance_m"                 # 升序
+  - "physical_intensity_rank"    # low=1, qualified_medium=2
+  - "activity_rank"              # active_3d=1, this_week=2, ...
+  - "shift_and_hours_score"
+  - "salary_score"
+
+# 硬性排除
+hard_exclusions:
+  - "age_rejects_60"
+  - "distance_over_3km"
+  - "hiring_closed"
+  - "intensity_unsuitable"
+  - "heavy_garbage_transport"
+  - "prolonged_high_intensity_outdoor"
+
+# 重点高亮行数
+highlight_top_n: 10
