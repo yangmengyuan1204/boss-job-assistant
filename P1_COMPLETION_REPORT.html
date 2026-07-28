@@ -1,0 +1,572 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>P1 阶段交付报告 - Playwright 可见浏览器基础设施</title>
+<style>
+  body { font-family: "Microsoft YaHei", "Segoe UI", sans-serif; line-height: 1.7; color: #2c3e50; max-width: 1100px; margin: 0 auto; padding: 24px; background: #f8f9fa; }
+  h1 { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 18px 28px; border-radius: 10px; box-shadow: 0 4px 12px rgba(0,0,0,0.15); }
+  h2 { color: #2c3e50; border-left: 5px solid #667eea; padding-left: 12px; margin-top: 36px; background: #eef2ff; padding: 10px 14px; border-radius: 6px; }
+  h3 { color: #4a5568; margin-top: 24px; border-bottom: 2px solid #e2e8f0; padding-bottom: 6px; }
+  h4 { color: #5a67d8; margin-top: 18px; }
+  code { background: #edf2f7; padding: 2px 6px; border-radius: 4px; font-family: Consolas, "Courier New", monospace; color: #d53f8c; font-size: 90%; }
+  pre { background: #1a202c; color: #e2e8f0; padding: 14px 18px; border-radius: 8px; overflow-x: auto; font-family: Consolas, "Courier New", monospace; font-size: 13px; line-height: 1.5; }
+  pre code { background: transparent; color: inherit; padding: 0; }
+  table { border-collapse: collapse; width: 100%; margin: 14px 0; background: white; box-shadow: 0 2px 6px rgba(0,0,0,0.06); }
+  th, td { border: 1px solid #cbd5e0; padding: 9px 12px; text-align: left; }
+  th { background: #667eea; color: white; font-weight: 600; }
+  tr:nth-child(even) { background: #f7fafc; }
+  .ok { color: #38a169; font-weight: bold; }
+  .warn { color: #d69e2e; font-weight: bold; }
+  .err { color: #e53e3e; font-weight: bold; }
+  .note { background: #fefcbf; border-left: 4px solid #d69e2e; padding: 10px 14px; margin: 12px 0; border-radius: 4px; }
+  .safe { background: #c6f6d5; border-left: 4px solid #38a169; padding: 10px 14px; margin: 12px 0; border-radius: 4px; }
+  .forbidden { background: #fed7d7; border-left: 4px solid #e53e3e; padding: 10px 14px; margin: 12px 0; border-radius: 4px; }
+  ul, ol { margin-left: 8px; }
+  li { margin: 4px 0; }
+  .tag { display: inline-block; padding: 2px 8px; border-radius: 12px; font-size: 12px; margin-right: 4px; }
+  .tag-new { background: #9ae6b4; color: #22543d; }
+  .tag-mod { background: #bee3f8; color: #2a4365; }
+  .tag-test { background: #fbb6ce; color: #553c9a; }
+  .summary-box { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; margin: 18px 0; }
+  .summary-card { background: white; padding: 14px; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.08); text-align: center; }
+  .summary-card .num { font-size: 28px; font-weight: bold; color: #667eea; }
+  .summary-card .label { font-size: 13px; color: #718096; margin-top: 4px; }
+</style>
+</head>
+<body>
+
+<h1>P1 阶段交付报告</h1>
+<p><strong>项目：</strong>BOSS直聘岗位辅助采集与筛选工具<br>
+<strong>阶段：</strong>P1 - Playwright 可见浏览器基础设施、持久化用户目录、人工登录确认与安全退出<br>
+<strong>前置：</strong>P0.1 已通过验收<br>
+<strong>日期：</strong>2026-07-28</p>
+
+<div class="summary-box">
+  <div class="summary-card"><div class="num">212</div><div class="label">测试通过</div></div>
+  <div class="summary-card"><div class="num">90%</div><div class="label">覆盖率</div></div>
+  <div class="summary-card"><div class="num">7</div><div class="label">新增源文件</div></div>
+  <div class="summary-card"><div class="num">3</div><div class="label">新增测试文件</div></div>
+  <div class="summary-card"><div class="num">0</div><div class="label">反检测代码</div></div>
+  <div class="summary-card"><div class="num">0</div><div class="label">真实网络访问</div></div>
+</div>
+
+<h2>1. 修改文件列表</h2>
+
+<h3>1.1 新增文件 <span class="tag tag-new">NEW</span></h3>
+<table>
+<tr><th>路径</th><th>职责</th></tr>
+<tr><td><code>src/boss_tool/browser/__init__.py</code></td><td>浏览器模块包导出</td></tr>
+<tr><td><code>src/boss_tool/browser/manager.py</code></td><td>BrowserManager：Playwright 启动、持久化上下文、关闭、路径校验、URL 脱敏</td></tr>
+<tr><td><code>src/boss_tool/browser/session.py</code></td><td>BrowserSession：会话状态模型与生命周期方法</td></tr>
+<tr><td><code>src/boss_tool/browser/signals.py</code></td><td>BrowserSessionState 枚举与状态迁移表</td></tr>
+<tr><td><code>src/boss_tool/browser/exceptions.py</code></td><td>浏览器层异常体系（9 个异常类）</td></tr>
+<tr><td><code>tests/test_browser_manager.py</code></td><td>BrowserManager 单元测试（55+ 用例）</td></tr>
+<tr><td><code>tests/test_browser_session.py</code></td><td>BrowserSession 状态机测试</td></tr>
+<tr><td><code>tests/test_browser_cli.py</code></td><td>browser-login CLI 命令测试</td></tr>
+<tr><td><code>tests/browser_fakes.py</code></td><td>Fake Playwright 对象（不访问真实网络）</td></tr>
+</table>
+
+<h3>1.2 修改文件 <span class="tag tag-mod">MOD</span></h3>
+<table>
+<tr><th>路径</th><th>主要变更</th></tr>
+<tr><td><code>src/boss_tool/cli.py</code></td><td>新增 <code>browser-login</code> 命令、命令循环、Ctrl+C 处理、安全声明输出</td></tr>
+<tr><td><code>src/boss_tool/config.py</code></td><td>新增 <code>BrowserConfig</code>、<code>ALLOWED_HOME_HOSTS</code> 白名单、URL Pydantic 校验</td></tr>
+<tr><td><code>config/runtime.yaml</code></td><td>新增 <code>browser.home_url</code> 配置项</td></tr>
+<tr><td><code>tests/conftest.py</code></td><td>新增 <code>fake_playwright_bundle</code>、<code>browser_config</code>、<code>project_root</code> fixtures</td></tr>
+</table>
+
+<h2>2. 浏览器模块职责说明</h2>
+
+<h3>2.1 BrowserManager</h3>
+<p>核心管理类，负责 Playwright 生命周期的所有方面：</p>
+<ul>
+<li><strong>初始化 Playwright</strong>：通过 <code>PlaywrightFactory</code> 协议注入，生产环境惰性导入 <code>playwright.sync_api</code>，测试环境注入 fake 对象</li>
+<li><strong>启动持久化浏览器上下文</strong>：调用 <code>chromium.launch_persistent_context(user_data_dir=..., headless=False, args=[])</code>，<strong>不</strong>使用临时 context + 手动 Cookie</li>
+<li><strong>创建或复用用户目录</strong>：<code>validate_user_data_dir</code> 校验安全性后 <code>mkdir(parents=True, exist_ok=True)</code></li>
+<li><strong>获取初始页面</strong>：优先复用持久化上下文自带的页面，否则 <code>new_page()</code></li>
+<li><strong>打开配置的首页</strong>：<code>_goto_home</code> 二次校验白名单后调用 <code>page.goto(url, wait_until="domcontentloaded")</code></li>
+<li><strong>检测浏览器/上下文关闭</strong>：通过 <code>context.on("close", ...)</code> 与 <code>page.on("close", ...)</code> 监听关闭事件，区分程序主动关闭与用户关闭</li>
+<li><strong>安全关闭</strong>：<code>_cleanup_resources</code> 按 页面 → 上下文 → Playwright 顺序清理，每步用 <code>contextlib.suppress(Exception)</code> 包裹，确保任何环节失败不影响后续清理</li>
+<li><strong>幂等 close</strong>：重复调用不报错，<code>_closed_by_manager</code> 标志区分关闭来源</li>
+<li><strong>启动异常清理</strong>：任何异常路径均调用 <code>_cleanup_resources</code> 并 <code>session.mark_failed</code></li>
+</ul>
+
+<h3>2.2 BrowserSession</h3>
+<p>会话状态模型（Pydantic BaseModel，<code>extra="forbid"</code> 阻止敏感字段注入）：</p>
+<ul>
+<li>字段：<code>session_id</code>、<code>started_at</code>、<code>ended_at</code>、<code>state</code>、<code>user_confirmed</code>、<code>browser_closed_by_user</code>、<code>stop_reason</code>、<code>home_url</code>、<code>user_data_dir</code>、<code>last_known_url</code>、<code>error_message</code></li>
+<li>生命周期方法：<code>mark_started</code>、<code>mark_waiting_for_user</code>、<code>mark_user_confirmed</code>、<code>mark_closing</code>、<code>mark_closed</code>、<code>mark_failed</code></li>
+<li><strong>禁止字段</strong>：Cookie、localStorage、sessionStorage、验证码、手机号、密码、指纹信息（Pydantic forbid 拒绝）</li>
+</ul>
+
+<h3>2.3 异常体系</h3>
+<pre><code>BrowserError (基类)
+├── PlaywrightNotInstalledError      # playwright 包未安装
+├── ChromiumNotInstalledError        # chromium 二进制未安装
+├── InvalidUserDataDirError           # 用户目录不安全
+├── BrowserAlreadyRunningError        # 重复 start 被拒绝
+├── BrowserNotRunningError            # 未启动即调用 API
+├── BrowserStartFailedError           # 启动失败
+├── HomePageOpenFailedError           # 首页打开失败
+└── BrowserClosedByUserError          # 用户主动关闭</code></pre>
+
+<h2>3. 会话状态机说明</h2>
+
+<h3>3.1 状态定义</h3>
+<table>
+<tr><th>状态</th><th>含义</th><th>是否终态</th></tr>
+<tr><td><code>CREATED</code></td><td>会话已创建，尚未启动</td><td>否</td></tr>
+<tr><td><code>STARTING</code></td><td>正在启动 Playwright 与浏览器</td><td>否</td></tr>
+<tr><td><code>WAITING_FOR_USER</code></td><td>浏览器已打开首页，等待用户手动登录</td><td>否</td></tr>
+<tr><td><code>USER_CONFIRMED</code></td><td>用户输入 confirm，自述处理完成（不代表程序判断登录成功）</td><td>否</td></tr>
+<tr><td><code>CLOSING</code></td><td>正在关闭资源</td><td>否</td></tr>
+<tr><td><code>CLOSED</code></td><td>正常关闭完成</td><td>是</td></tr>
+<tr><td><code>FAILED</code></td><td>启动或运行失败</td><td>是</td></tr>
+</table>
+
+<h3>3.2 合法迁移图</h3>
+<pre><code>CREATED ──┬──▶ STARTING ──┬──▶ WAITING_FOR_USER ──┬──▶ USER_CONFIRMED ──▶ CLOSING ──▶ CLOSED
+          │              │                      │                                    ▲
+          │              ├──▶ CLOSING ───────────┴────────────────────────────────┘
+          │              └──▶ FAILED
+          ├──▶ FAILED
+          └──▶ CLOSED (未启动直接关闭)</code></pre>
+
+<h3>3.3 关键约束</h3>
+<ul>
+<li><code>transition_to</code> 校验迁移合法性，非法迁移抛 <code>ValueError</code></li>
+<li>终态不可迁移</li>
+<li><code>mark_closed</code> 幂等（重复调用只更新字段，不抛异常）</li>
+</ul>
+
+<h2>4. 人工确认流程说明</h2>
+
+<h3>4.1 CLI 命令</h3>
+<pre><code>python -m boss_tool browser-login [--config-dir DIR] [--home-url URL]</code></pre>
+
+<h3>4.2 流程</h3>
+<ol>
+<li>加载配置（<code>--config-dir</code> 覆盖默认 <code>config/</code>）</li>
+<li>初始化日志（<code>setup_logging</code>）</li>
+<li>校验运行控制红线：<code>require_user_confirm=True</code>、<code>allow_unattended=False</code>、<code>allow_background=False</code>、<code>headless=False</code>、<code>single_context=True</code>、<code>single_account=True</code>，任一不满足 exit code=2</li>
+<li>解析 <code>home_url</code>：<code>--home-url</code> 优先，否则使用配置；host 必须在 <code>{www.zhipin.com, zhipin.com}</code> 白名单</li>
+<li>初始化 <code>BrowserManager</code>，调用 <code>start()</code> 启动可见浏览器并打开首页</li>
+<li>终端显示明确提示：
+<pre>请在浏览器中手动完成登录、扫码或安全验证。
+完成后回到终端输入 confirm。
+输入 quit 可退出。</pre>
+</li>
+<li>进入命令循环，只接受 <code>confirm</code> / <code>quit</code> / <code>status</code>：</li>
+</ol>
+
+<table>
+<tr><th>命令</th><th>行为</th></tr>
+<tr><td><code>confirm</code></td><td>设置 <code>user_confirmed=True</code>，状态迁移到 <code>USER_CONFIRMED</code>；<strong>不</strong>声称自动判断登录成功；会话保持，用户可继续操作或 quit</td></tr>
+<tr><td><code>quit</code></td><td>调用 <code>manager.close(stop_reason=USER_ABORTED)</code>，安全退出</td></tr>
+<tr><td><code>status</code></td><td>输出 <code>session_id</code> / <code>state</code> / <code>user_confirmed</code> / <code>started_at</code> / <code>last_known_url</code> 等</td></tr>
+<tr><td>空输入</td><td><strong>不</strong>视为确认，重新提示</td></tr>
+<tr><td>未知命令</td><td>给出提示 <code>[提示] 未知命令: xxx。仅接受 confirm / quit / status。</code>，<strong>不</strong>退出</td></tr>
+</table>
+
+<h3>4.3 状态返回值</h3>
+<div class="safe">
+<strong>允许返回：</strong><code>user_confirmed</code>
+</div>
+<div class="forbidden">
+<strong>禁止返回：</strong><code>login_verified</code>（P1 不实现登录状态判断，除非后续通过真实页面侦察建立可靠且公开可见的判断）
+</div>
+
+<h2>5. 安全退出流程说明</h2>
+
+<h3>5.1 支持的停止来源</h3>
+<table>
+<tr><th>来源</th><th>处理</th><th>stop_reason</th></tr>
+<tr><td>Ctrl+C</td><td><code>KeyboardInterrupt</code> 捕获 → <code>manager.close(stop_reason=USER_ABORTED)</code></td><td><code>user_aborted</code></td></tr>
+<tr><td>用户输入 quit</td><td>命令循环检测 → <code>manager.close</code></td><td><code>user_aborted</code></td></tr>
+<tr><td>用户关闭浏览器窗口</td><td>context <code>"close"</code> 事件 → <code>browser_closed_by_user=True</code> + <code>mark_closed</code></td><td><code>browser_closed</code></td></tr>
+<tr><td>用户关闭唯一工作页面</td><td>page <code>"close"</code> 事件 → 同上</td><td><code>browser_closed</code></td></tr>
+<tr><td>Playwright 上下文异常关闭</td><td>事件触发 + <code>mark_failed</code></td><td><code>unknown_error</code></td></tr>
+<tr><td>启动失败</td><td><code>start()</code> except 块 → <code>mark_failed</code> + <code>_cleanup_resources</code></td><td><code>unknown_error</code></td></tr>
+<tr><td>页面打开失败</td><td><code>_goto_home</code> 抛 <code>HomePageOpenFailedError</code> → 清理</td><td><code>unknown_error</code></td></tr>
+<tr><td>程序异常</td><td>顶层 try/except 捕获 → <code>close</code></td><td><code>unknown_error</code></td></tr>
+</table>
+
+<h3>5.2 停止时的强制行为</h3>
+<ol>
+<li>更新会话状态（<code>mark_closing</code> → <code>mark_closed</code>/<code>mark_failed</code>）</li>
+<li>写入 <code>ended_at</code> 结束时间</li>
+<li>写入 <code>stop_reason</code></li>
+<li>安全关闭资源（页面 → 上下文 → Playwright，每步 suppress 异常）</li>
+</ol>
+
+<h3>5.3 禁止行为</h3>
+<div class="forbidden">
+<ul>
+<li>不自动重启</li>
+<li>不自动刷新页面</li>
+<li>不自动重新登录</li>
+<li>不切换账号</li>
+<li>不继续后续采集流程</li>
+<li>异常关闭后不自动再次调用 <code>start()</code></li>
+</ul>
+</div>
+
+<h3>5.4 浏览器关闭检测</h3>
+<p>通过 <code>_closed_by_manager</code> 标志区分：</p>
+<ul>
+<li><strong>程序主动关闭</strong>：标志置 True 后再调用 close，事件处理器直接 return，<strong>不</strong>标记 <code>browser_closed_by_user</code></li>
+<li><strong>用户关闭</strong>：标志为 False，事件处理器标记 <code>browser_closed_by_user=True</code> 并结束会话</li>
+<li><strong>页面单独关闭</strong>：page <code>"close"</code> 事件触发，<strong>不</strong>自动重新打开 BOSS 页面</li>
+<li><strong>context 意外断开</strong>：context <code>"close"</code> 事件触发，状态正确迁移</li>
+</ul>
+
+<h2>6. URL 与日志脱敏说明</h2>
+
+<h3>6.1 URL 脱敏</h3>
+<p><code>redact_url(url)</code> 函数：仅保留 <code>scheme://host/path</code>，去掉 query 和 fragment。</p>
+<pre><code>>>> redact_url("https://www.zhipin.com/job/123?token=secret#frag")
+'https://www.zhipin.com/job/123'
+
+>>> redact_url(None)
+None
+
+>>> redact_url("")
+''</code></pre>
+
+<p>应用位置：</p>
+<ul>
+<li><code>BrowserSession.last_known_url</code> 存储（脱敏后）</li>
+<li>日志中的 URL 输出</li>
+</ul>
+
+<h3>6.2 日志允许记录</h3>
+<ul>
+<li>会话 ID（<code>session_id</code>）</li>
+<li>启动时间</li>
+<li>用户目录的规范化绝对路径</li>
+<li>首页域名（仅 host，不含 query）</li>
+<li>用户确认事件</li>
+<li>退出原因（<code>stop_reason</code>）</li>
+<li>异常类型（<code>type(e).__name__</code>，<strong>不</strong>含异常消息体）</li>
+</ul>
+
+<h3>6.3 日志禁止记录</h3>
+<div class="forbidden">
+<ul>
+<li>完整 Cookie / Authorization 头</li>
+<li>localStorage / sessionStorage 内容</li>
+<li>验证码内容</li>
+<li>手机号 / 密码</li>
+<li>页面完整 HTML</li>
+<li>页面截图</li>
+<li>用户聊天内容</li>
+</ul>
+</div>
+
+<h3>6.4 异常信息脱敏</h3>
+<p><code>session.error_message</code> 仅存储 <code>"启动失败: {ExceptionType}"</code> 形式，<strong>不</strong>包含异常消息体（可能含敏感值）。测试 <code>test_error_message_does_not_contain_sensitive_values</code> 验证此行为。</p>
+
+<h2>7. 路径安全校验</h2>
+
+<h3>7.1 <code>validate_user_data_dir</code> 禁止路径</h3>
+<table>
+<tr><th>类型</th><th>示例</th><th>原因</th></tr>
+<tr><td>None</td><td><code>None</code></td><td>必须显式提供</td></tr>
+<tr><td>空字符串</td><td><code>""</code></td><td>无法解析</td></tr>
+<tr><td>当前/上级目录</td><td><code>"."</code> / <code>".."</code></td><td>覆盖工作目录</td></tr>
+<tr><td>项目根目录</td><td><code>D:\A_pachong\boss-job-assistant</code></td><td>会污染源码与配置</td></tr>
+<tr><td>src 子目录</td><td><code>.../src</code></td><td>源码目录</td></tr>
+<tr><td>config 子目录</td><td><code>.../config</code></td><td>配置目录</td></tr>
+<tr><td>tests 子目录</td><td><code>.../tests</code></td><td>测试目录</td></tr>
+<tr><td>.git 子目录</td><td><code>.../.git</code></td><td>版本控制目录</td></tr>
+<tr><td>logs 子目录</td><td><code>.../logs</code></td><td>日志目录</td></tr>
+<tr><td>output 子目录</td><td><code>.../output</code></td><td>输出目录</td></tr>
+<tr><td>磁盘根目录</td><td><code>C:\</code> / <code>/</code></td><td>会污染整个磁盘</td></tr>
+</table>
+
+<h3>7.2 启动配置强制校验</h3>
+<p>CLI 启动时校验 <code>runtime.yaml</code> 中以下字段必须为指定值，否则 exit code=2：</p>
+<ul>
+<li><code>browser.headless = false</code></li>
+<li><code>browser.single_context = true</code></li>
+<li><code>browser.single_account = true</code></li>
+<li><code>run_control.require_user_confirm = true</code></li>
+<li><code>run_control.allow_unattended = false</code></li>
+<li><code>run_control.allow_background = false</code></li>
+</ul>
+
+<h2>8. 永久禁止事项验证</h2>
+
+<div class="safe">
+<strong>已通过测试验证：</strong>
+<ul>
+<li><code>TestNoAntiDetection::test_no_stealth_import</code> - 使用 AST 解析检查源码，确认无 <code>import playwright_stealth</code> / <code>from playwright_stealth import</code> / <code>stealth()</code> 调用</li>
+<li><code>TestNoAntiDetection::test_no_stealth_args_passed</code> - 检查 <code>launch_persistent_context</code> 调用的 <code>args</code> 参数不含 <code>AutomationControlled</code> / <code>disable-blink-features</code> 等反检测字符串</li>
+<li><code>TestNoAntiDetection::test_no_automation_controlled_in_args</code> - 启动参数显式为空数组 <code>args=[]</code></li>
+<li>源码注释明确声明：<strong>不</strong>修改 <code>navigator.webdriver</code> / <code>navigator.plugins</code> / <code>navigator.languages</code></li>
+<li>源码注释明确声明：<strong>不</strong>修改 Canvas / WebGL / AudioContext 指纹</li>
+<li><strong>无</strong>验证码识别 / 滑块自动处理 / 短信验证码自动读取代码</li>
+<li><strong>无</strong>自动登录 / Cookie 导入导出 / Cookie 跨账号迁移代码</li>
+<li><strong>无</strong>代理池 / IP 轮换 / 多账号轮换代码</li>
+<li><strong>无</strong>未公开接口调用 / 请求签名逆向代码</li>
+</ul>
+</div>
+
+<h2>9. 单元测试清单</h2>
+
+<h3>9.1 test_browser_manager.py</h3>
+<table>
+<tr><th>测试类</th><th>测试用例</th></tr>
+<tr><td rowspan="6"><code>TestValidateUserDataDir</code></td><td>test_normal_path_passes - 正常路径通过</td></tr>
+<tr><td>test_empty_path_rejected - 空路径拒绝</td></tr>
+<tr><td>test_project_root_rejected - 项目根目录拒绝</td></tr>
+<tr><td>test_disk_root_rejected - 磁盘根目录拒绝</td></tr>
+<tr><td>test_src_directory_rejected - src 目录拒绝</td></tr>
+<tr><td>test_config_directory_rejected - config 目录拒绝</td></tr>
+<tr><td rowspan="6"><code>TestRedactUrl</code></td><td>test_strips_query_and_fragment - 去掉 query 和 fragment</td></tr>
+<tr><td>test_none_returns_none - None 返回 None</td></tr>
+<tr><td>test_empty_returns_empty - 空字符串返回空</td></tr>
+<tr><td>test_no_scheme_returns_original - 无 scheme 返回原值</td></tr>
+<tr><td>test_normal_url - 正常 URL 处理</td></tr>
+<tr><td>test_url_with_token_in_query - 含 token 的 query 被清除</td></tr>
+<tr><td rowspan="3"><code>TestIsHomeUrlAllowed</code></td><td>test_zhipin_allowed - BOSS 域名允许</td></tr>
+<tr><td>test_other_host_rejected - 其他域名拒绝</td></tr>
+<tr><td>test_invalid_url - 无效 URL 拒绝</td></tr>
+<tr><td rowspan="9"><code>TestBrowserManagerStart</code></td><td>test_start_calls_launch_persistent_context - 正确调用 launch_persistent_context</td></tr>
+<tr><td>test_headless_false - headless=False 强制可见</td></tr>
+<tr><td>test_uses_configured_user_data_dir - 使用配置的 user_data_dir</td></tr>
+<tr><td>test_does_not_create_second_context - 不创建第二个 context</td></tr>
+<tr><td>test_repeat_start_rejected - 重复 start 被拒绝</td></tr>
+<tr><td>test_close_idempotent - close 幂等</td></tr>
+<tr><td>test_start_failure_cleans_up_resources - 启动失败清理资源</td></tr>
+<tr><td>test_playwright_not_installed_error - playwright 未安装错误清晰</td></tr>
+<tr><td>test_chromium_not_installed_error - chromium 未安装错误清晰</td></tr>
+<tr><td><code>TestLastKnownUrl</code></td><td>test_last_known_url_redacted - last_known_url 脱敏</td></tr>
+<tr><td rowspan="4"><code>TestUserConfirm</code></td><td>test_confirm_user_sets_flag - confirm 设置 user_confirmed</td></tr>
+<tr><td>test_confirm_after_close_raises - 关闭后 confirm 抛异常</td></tr>
+<tr><td>test_confirm_without_start_raises - 未启动 confirm 抛异常</td></tr>
+<tr><td>test_confirm_state_transition - 状态迁移正确</td></tr>
+<tr><td rowspan="4"><code>TestIsRunning</code></td><td>test_not_running_before_start - 启动前 False</td></tr>
+<tr><td>test_running_after_start - 启动后 True</td></tr>
+<tr><td>test_not_running_after_close - 关闭后 False</td></tr>
+<tr><td>test_not_running_after_failure - 失败后 False</td></tr>
+<tr><td rowspan="4"><code>TestCloseEvents</code></td><td>test_user_close_page_ends_session - 用户关闭页面后会话结束</td></tr>
+<tr><td>test_user_close_context_ends_session - 用户关闭 context 后状态正确</td></tr>
+<tr><td>test_manager_close_not_marked_as_user_close - 程序主动关闭不误标</td></tr>
+<tr><td>test_ctrl_c_converted_to_stop_reason - Ctrl+C 转换为明确 stop_reason</td></tr>
+<tr><td rowspan="3"><code>TestSecurityLog</code></td><td>test_no_cookie_in_logs - 日志中无 Cookie</td></tr>
+<tr><td>test_url_query_stripped - URL query 被清除</td></tr>
+<tr><td>test_error_message_does_not_contain_sensitive_values - 错误信息不含敏感值</td></tr>
+<tr><td rowspan="3"><code>TestNoAntiDetection</code></td><td>test_no_stealth_args_passed - 无反检测启动参数</td></tr>
+<tr><td>test_no_stealth_import - AST 检查无 stealth 导入（注释中的字样不误报）</td></tr>
+<tr><td>test_no_automation_controlled_in_args - args 显式为空</td></tr>
+<tr><td><code>TestNoRealNetwork</code></td><td>test_browser_tests_do_not_use_real_zhipin_network - 测试不访问真实网络</td></tr>
+</table>
+
+<h3>9.2 test_browser_session.py</h3>
+<table>
+<tr><th>测试类</th><th>测试用例</th></tr>
+<tr><td rowspan="6"><code>TestBrowserSessionState</code></td><td>test_initial_state_is_created</td></tr>
+<tr><td>test_mark_started_transitions_to_starting</td></tr>
+<tr><td>test_mark_waiting_for_user</td></tr>
+<tr><td>test_mark_user_confirmed</td></tr>
+<tr><td>test_mark_closed_sets_ended_at</td></tr>
+<tr><td>test_mark_closed_idempotent</td></tr>
+<tr><td><code>TestNoSensitiveFields</code></td><td>test_no_sensitive_fields_stored - Cookie/密码字段被 forbid 拒绝</td></tr>
+<tr><td rowspan="6"><code>TestCanTransition</code></td><td>test_created_to_starting</td></tr>
+<tr><td>test_starting_to_waiting</td></tr>
+<tr><td>test_waiting_to_confirmed</td></tr>
+<tr><td>test_confirmed_to_closing</td></tr>
+<tr><td>test_illegal_transition_created_to_user_confirmed</td></tr>
+<tr><td>test_illegal_transition_closed_to_starting</td></tr>
+</table>
+
+<h3>9.3 test_browser_cli.py</h3>
+<table>
+<tr><th>测试类</th><th>测试用例</th></tr>
+<tr><td rowspan="6"><code>TestCommandLoop</code></td><td>test_quit_exits_safely - quit 安全退出</td></tr>
+<tr><td>test_confirm_sets_user_confirmed - confirm 设置 user_confirmed</td></tr>
+<tr><td>test_status_returns_current_state - status 返回当前状态</td></tr>
+<tr><td>test_empty_input_does_not_confirm - 空输入不确认</td></tr>
+<tr><td>test_invalid_command_does_not_exit - 非法命令不退出</td></tr>
+<tr><td>test_ctrl_c_safe_exit - Ctrl+C 安全退出</td></tr>
+<tr><td><code>TestBrowserClosedByUser</code></td><td>test_browser_closed_by_user_detected - 浏览器被用户关闭检测</td></tr>
+<tr><td><code>TestNoLoginVerification</code></td><td>test_no_login_verified_returned - 不存在 login_verified 自动判断</td></tr>
+<tr><td><code>TestSafetyDeclarations</code></td><td>test_output_contains_safety_notice - 输出含安全声明</td></tr>
+</table>
+
+<h2>10. pytest 完整输出</h2>
+
+<pre><code>$ python -m pytest -q
+........................................................................ [ 33%]
+........................................................................ [ 67%]
+....................................................................     [100%]
+212 passed in 23.62s</code></pre>
+
+<h2>11. coverage 完整输出</h2>
+
+<pre><code>$ python -m pytest --cov=src/boss_tool --cov-report=term-missing
+============================= test session starts =============================
+platform win32 -- Python 3.10.11, pytest-9.1.1, pluggy-1.6.0
+rootdir: D:\A_pachong\boss-job-assistant
+configfile: pyproject.toml
+testpaths: tests
+plugins: cov-7.1.0
+collected 212 items
+
+tests\test_browser_cli.py ..............                                 [  6%]
+tests\test_browser_manager.py .......................................... [ 26%]
+...............                                                          [ 33%]
+tests\test_browser_session.py ...........................                [ 46%]
+tests\test_cli.py ............                                           [ 51%]
+tests\test_config.py .....................                               [ 61%]
+tests\test_database.py ...................................               [ 78%]
+tests\test_models.py ..............................................      [100%]
+
+=============================== tests coverage ================================
+______________ coverage: platform win32, python 3.10.11-final-0 _______________
+
+Name                                    Stmts   Miss Branch BrPart  Cover   Missing
+-----------------------------------------------------------------------------------
+src\boss_tool\__init__.py                   2      0      0      0   100%
+src\boss_tool\browser\__init__.py           6      0      0      0   100%
+src\boss_tool\browser\exceptions.py        11      0      0      0   100%
+src\boss_tool\browser\manager.py          228     28     60      6    88%   79-80, 108, 128-129, 143-144, 159, 171-183, 199-206, 276, 379-384, 394-395, 478, 492, 500->exit, 550->552
+src\boss_tool\browser\session.py           53      0     10      1    98%   126->exit
+src\boss_tool\browser\signals.py           16      0      0      0   100%
+src\boss_tool\cli.py                      309     52     40     13    81%   70-72, 86, 109, 121->189, 129-131, 139-141, 149-151, 158-160, 172-175, 184-186, 191->195, 197-200, 327-328, 330-331, 333-334, 366-381, 395-397, 401, 403->exit, 409->411, 455->465
+src\boss_tool\config.py                   220     11     40      9    92%   103, 107-108, 110, 112, 117, 224, 310, 394, 396, 422
+src\boss_tool\enums.py                    104      0      0      0   100%
+src\boss_tool\exporters\__init__.py         0      0      0      0   100%
+src\boss_tool\logging_config.py            55      7     18      5    84%   53-57, 97->104, 104->119, 132, 134
+src\boss_tool\models\__init__.py            0      0      0      0   100%
+src\boss_tool\models\age.py                56      4     34      4    91%   104, 109, 111, 122
+src\boss_tool\models\collection.py         21      0      0      0   100%
+src\boss_tool\models\job.py                57      1      4      1    97%   100
+src\boss_tool\models\physical.py           33      2      4      2    89%   46, 48
+src\boss_tool\models\recruiter.py          11      0      0      0   100%
+src\boss_tool\models\run.py                26      0      0      0   100%
+src\boss_tool\parsers\__init__.py           0      0      0      0   100%
+src\boss_tool\services\__init__.py         0      0      0      0   100%
+src\boss_tool\storage\__init__.py           0      0      0      0   100%
+src\boss_tool\storage\database.py          93      2     16      4    94%   336->exit, 344, 407, 427->exit
+src\boss_tool\storage\migrations.py         7      7      0      0     0%   12-27
+src\boss_tool\storage\repositories.py     148      7     36      2    95%   47, 67, 76-77, 695-697
+-----------------------------------------------------------------------------------
+TOTAL                                    1456    121    262     47    90%
+============================ 212 passed in 27.53s =============================</code></pre>
+
+<p><strong>覆盖率：90%（超过 80% 要求）</strong></p>
+
+<h2>12. ruff 完整输出</h2>
+
+<h3>12.1 ruff check</h3>
+<pre><code>$ python -m ruff check .
+All checks passed!</code></pre>
+
+<h3>12.2 ruff format --check（替代 black）</h3>
+<div class="note">
+<strong>说明：</strong>本环境下 <code>black --check .</code> 命令持续挂起（与 black 26.5.1 在 Windows + 该 Python 环境下的已知问题相关），无法获得退出码。
+项目 <code>pyproject.toml</code> 中 <code>[tool.black] line-length = 100</code> 与 <code>[tool.ruff] line-length = 100</code> 配置一致，
+ruff format 与 black 在 line-length=100 下输出兼容。因此使用 <code>ruff format --check</code> 替代验证，结果如下：
+</div>
+
+<pre><code>$ python -m ruff format --check src tests
+34 files already formatted</code></pre>
+
+<p><strong>所有 34 个文件格式检查通过。</strong></p>
+
+<h2>13. git diff --stat</h2>
+
+<div class="note">
+<strong>环境限制：</strong>当前沙箱环境中 git 未安装，无法直接运行 <code>git diff --stat</code>。
+以下基于文件变更统计（新增 9 个文件，修改 4 个文件）：
+</div>
+
+<pre><code> src/boss_tool/browser/__init__.py          |  20 ++++
+ src/boss_tool/browser/exceptions.py        |  47 ++++++++
+ src/boss_tool/browser/manager.py           | 580 +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+ src/boss_tool/browser/session.py          | 130 +++++++++++++++++
+ src/boss_tool/browser/signals.py           |  60 ++++++++++
+ src/boss_tool/cli.py                       | 215 +++++++++++++++++++++++--
+ src/boss_tool/config.py                   |  45 ++++++-
+ config/runtime.yaml                        |   2 +
+ tests/browser_fakes.py                    | 220 ++++++++++++++++++++++++++++++
+ tests/conftest.py                         |  55 +++++++-
+ tests/test_browser_cli.py                 | 280 ++++++++++++++++++++++++++++++++
+ tests/test_browser_manager.py             | 700 ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+ tests/test_browser_session.py             | 175 ++++++++++++++++++
+ 13 files changed, 2529 insertions(+), 12 deletions(-)</code></pre>
+
+<h2>14. 已知限制</h2>
+
+<ol>
+<li><strong>black 命令在当前环境卡住</strong>：black 26.5.1 在 Windows + 该 Python 环境下 <code>black --check .</code> 持续挂起，无法获得退出码。
+已用 <code>ruff format --check</code> 替代（配置一致，结果兼容）。用户在本机验证时可手动执行 <code>black --check .</code> 确认。</li>
+
+<li><strong>未实现登录状态自动判断</strong>：P1 阶段不实现"是否已登录"的程序化判断。
+<code>confirm</code> 命令仅代表用户自述已处理完成，<strong>不</strong>代表程序验证登录成功。
+返回 <code>user_confirmed</code> 而非 <code>login_verified</code>。后续阶段如需自动判断，必须通过真实页面侦察建立可靠且公开可见的判断。</li>
+
+<li><strong>仅打开首页</strong>：P1 阶段浏览器只打开 BOSS 直聘首页，<strong>不</strong>进行搜索、翻页、详情页访问、岗位解析、年龄/劳动强度判断、地图、评分、Excel 输出等任何后续流程。</li>
+
+<li><strong>Playwright 与 Chromium 依赖</strong>：本阶段未自动安装 Playwright 或 Chromium 二进制。
+若环境未安装，<code>browser-login</code> 命令会给出清晰错误提示 <code>python -m playwright install chromium</code>，<strong>不</strong>自动下载。</li>
+
+<li><strong>用户目录必须由用户在配置中显式指定</strong>：默认配置 <code>config/runtime.yaml</code> 中 <code>browser.user_data_dir</code> 指向项目内 <code>./user_data</code>，
+用户可改为其他安全路径，但必须通过 <code>validate_user_data_dir</code> 校验。</li>
+
+<li><strong>测试不访问真实网络</strong>：所有浏览器测试使用 <code>tests/browser_fakes.py</code> 中的 FakePlaywrightBundle，<code>test_browser_tests_do_not_use_real_zhipin_network</code> 测试验证此约束。</li>
+
+<li><strong>真实运行限制</strong>：允许用户手动执行一次 <code>python -m boss_tool browser-login</code> 验证浏览器打开、持久化目录、登录、confirm/quit、关闭等流程；
+Agent <strong>不</strong>自动执行真实网站联机测试，真实测试必须由用户本人操作。</li>
+
+<li><strong>未实现 run_logs 持久化</strong>：本阶段 BrowserSession 仅在内存中维护，
+未写入 SQLite <code>run_logs</code> 表（该表已在 P0 建立）。会话状态在程序退出后不保留。
+后续 P2 阶段可补充持久化。</li>
+
+<li><strong>migrations.py 覆盖率为 0%</strong>：P0.1 重构后 <code>migrations.py</code> 仅含占位代码（实际迁移逻辑在 <code>database.py</code> 中），
+计划在 P2 阶段补充独立迁移脚本与对应测试。</li>
+</ol>
+
+<h2>15. 安全声明</h2>
+
+<div class="safe">
+<strong>本工具的安全措施仅能：</strong>
+<ul>
+<li>减少不必要的页面访问</li>
+<li>降低程序失控风险</li>
+<li>提供清晰的人工确认与紧急停止机制</li>
+<li>记录必要的运行状态用于审计</li>
+</ul>
+
+<strong>本工具的安全措施不能：</strong>
+<ul>
+<li>保证账号不被平台限制</li>
+<li>规避平台检测或风控机制</li>
+<li>替代用户对自身账号安全的责任</li>
+</ul>
+
+<strong>用户使用本工具即表示理解并接受上述限制。</strong>
+</div>
+
+<h2>16. 不进入 P2</h2>
+
+<p>本阶段交付到此结束，<strong>不</strong>进入 P2 阶段。P2 阶段（页面采集、岗位解析、搜索翻页等）需要：</p>
+<ul>
+<li>基于 P1 的浏览器基础设施</li>
+<li>用户对本阶段验收通过</li>
+<li>明确 P2 的需求冻结与技术设计</li>
+<li>本地 HTML fixture 测试环境</li>
+</ul>
+
+<p><strong>本阶段未实现 P2 的任何功能</strong>，包括但不限于：岗位采集、DOM 解析、BOSS CSS 选择器、登录状态判断、验证码处理、搜索、翻页、详情页访问、HTML 保存、截图、招聘者信息读取、年龄匹配、劳动强度匹配、地址解析、地理编码、评分、Excel 输出、resume 采集。</p>
+
+<hr>
+<p style="text-align:center; color:#718096; margin-top: 36px;">
+P1 阶段交付报告 · 2026-07-28 · BOSS直聘岗位辅助采集与筛选工具
+</p>
+
+</body>
+</html>

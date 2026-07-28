@@ -12,9 +12,20 @@
 from __future__ import annotations
 
 from pathlib import Path
+from urllib.parse import urlparse
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+# ==================== 常量 ====================
+# 允许的 BOSS 直聘域名白名单。
+# 浏览器只允许打开这些域名下的页面，禁止打开其他任意外部域名。
+ALLOWED_HOME_HOSTS: frozenset[str] = frozenset(
+    {
+        "www.zhipin.com",
+        "zhipin.com",
+    }
+)
 
 
 # ==================== 子配置 ====================
@@ -67,14 +78,47 @@ class BrowserConfig(BaseModel):
     - headless 必须为 False（强制可见浏览器）
     - single_context 必须为 True
     - single_account 必须为 True
+    - home_url 必须为 BOSS 直聘白名单域名（https://www.zhipin.com/ 或 https://zhipin.com/）
     """
 
     model_config = ConfigDict(extra="forbid")
 
     user_data_dir: str = Field(..., min_length=1, description="持久化用户目录")
+    home_url: str = Field(..., min_length=1, description="浏览器首页 URL（仅 BOSS 直聘白名单域名）")
     headless: bool = Field(..., description="必须为 false")
     single_context: bool = Field(..., description="必须为 true")
     single_account: bool = Field(..., description="必须为 true")
+
+    @field_validator("home_url")
+    @classmethod
+    def _validate_home_url(cls, v: str) -> str:
+        """校验首页 URL 格式与域名白名单。
+
+        要求：
+        - 必须为 http/https 协议
+        - host 必须在 ALLOWED_HOME_HOSTS 白名单内
+        - 不允许 localhost 或 IP 形式
+        """
+        if not v or not v.strip():
+            raise ValueError("home_url 不能为空")
+        v = v.strip()
+        try:
+            parsed = urlparse(v)
+        except Exception as e:
+            raise ValueError(f"home_url 解析失败: {v}") from e
+        if parsed.scheme not in ("http", "https"):
+            raise ValueError(f"home_url 必须为 http/https 协议，当前为 {parsed.scheme!r} (url={v})")
+        if not parsed.netloc:
+            raise ValueError(f"home_url 缺少 host: {v}")
+        # 取 host（去掉端口）
+        host = parsed.hostname or ""
+        host = host.lower()
+        if host not in ALLOWED_HOME_HOSTS:
+            raise ValueError(
+                f"home_url host {host!r} 不在白名单 {sorted(ALLOWED_HOME_HOSTS)} 中，"
+                "仅允许 BOSS 直聘域名（www.zhipin.com / zhipin.com）"
+            )
+        return v
 
     @field_validator("headless")
     @classmethod
@@ -399,4 +443,5 @@ __all__ = [
     "ScoringConfig",
     "ConfigLoader",
     "load_config",
+    "ALLOWED_HOME_HOSTS",
 ]

@@ -5,6 +5,7 @@
 - doctor         # 健康检查（不访问网络）
 - init-db        # 初始化数据库
 - show-config    # 显示配置（敏感字段脱敏）
+- browser-login  # 启动可见浏览器，人工登录（P1）
 - run            # 预留（P0 未实现）
 - resume         # 预留（P0 未实现）
 - export         # 预留（P0 未实现）
@@ -20,16 +21,26 @@ import os
 import sys
 import tempfile
 from pathlib import Path
+from urllib.parse import urlparse
 
 import typer
 
-from boss_tool.config import load_config
+from boss_tool.browser import (
+    BrowserAlreadyRunningError,
+    BrowserManager,
+    BrowserStartFailedError,
+    ChromiumNotInstalledError,
+    HomePageOpenFailedError,
+    PlaywrightNotInstalledError,
+)
+from boss_tool.config import ALLOWED_HOME_HOSTS, load_config
+from boss_tool.enums import StopReason
 from boss_tool.logging_config import get_logger, setup_logging
 from boss_tool.storage.database import CURRENT_SCHEMA_VERSION, Database
 
 app = typer.Typer(
     name="boss-tool",
-    help="BOSS直聘岗位辅助采集与筛选工具 - P0 项目骨架",
+    help="BOSS直聘岗位辅助采集与筛选工具 - P1 浏览器基础层",
     no_args_is_help=True,
 )
 
@@ -189,8 +200,7 @@ def doctor(
         raise typer.Exit(code=1)
     typer.echo("doctor 完成，所有检查通过")
     typer.echo(
-        "注意：本工具仅减少不必要访问与程序失控风险，不能保证账号不受限制，"
-        "不得用于规避平台检测。"
+        "注意：本工具仅减少不必要访问与程序失控风险，不能保证账号不受限制，不得用于规避平台检测。"
     )
 
 
@@ -277,6 +287,184 @@ def show_config(
     typer.echo("[敏感信息]")
     typer.echo("  本工具不读取或打印 Cookie、API key、验证码等敏感信息。")
     typer.echo("  高德 API key 仅通过环境变量 AMAP_API_KEY 注入，不在配置文件中。")
+
+
+# ==================== 浏览器登录（P1） ====================
+@app.command(name="browser-login")
+def browser_login(
+    config_dir: Path | None = typer.Option(None, "--config-dir", "-c", help="配置目录"),
+    home_url: str | None = typer.Option(
+        None,
+        "--home-url",
+        help="覆盖首页 URL（仅本地测试或显式覆盖；生产仅允许 BOSS 白名单域名）",
+    ),
+) -> None:
+    """启动可见浏览器，用户手动登录后输入 confirm。
+
+    流程：
+    1. 加载配置
+    2. 初始化日志
+    3. 启动可见浏览器（headless=False）
+    4. 打开首页（BOSS 直聘白名单域名）
+    5. 用户在浏览器手动完成登录/扫码/验证
+    6. 回到终端输入 confirm / quit / status
+
+    安全规则：
+    - 不自动处理任何验证码 / 滑块 / 短信
+    - 不自动登录、不自动重试
+    - confirm 仅代表用户自述已处理完成，不代表程序判断登录成功
+    - Ctrl+C 或关闭浏览器均安全退出
+    """
+    cfg = _load_config_safe(config_dir)
+    _ensure_logging(cfg)
+
+    runtime_cfg = cfg["runtime"]
+    browser_cfg = runtime_cfg.browser
+    run_control_cfg = runtime_cfg.run_control
+
+    # 校验 run_control 红线
+    if not run_control_cfg.require_user_confirm:
+        typer.echo("[ERROR] 配置错误：require_user_confirm 必须为 true", err=True)
+        raise typer.Exit(code=2)
+    if run_control_cfg.allow_unattended:
+        typer.echo("[ERROR] 配置错误：allow_unattended 必须为 false", err=True)
+        raise typer.Exit(code=2)
+    if run_control_cfg.allow_background:
+        typer.echo("[ERROR] 配置错误：allow_background 必须为 false", err=True)
+        raise typer.Exit(code=2)
+
+    # 解析首页 URL
+    effective_home_url = home_url or browser_cfg.home_url
+    # 二次校验白名单
+    host = (urlparse(effective_home_url).hostname or "").lower()
+    if host not in ALLOWED_HOME_HOSTS:
+        typer.echo(
+            f"[ERROR] home_url host {host!r} 不在白名单 {sorted(ALLOWED_HOME_HOSTS)} 中",
+            err=True,
+        )
+        raise typer.Exit(code=2)
+
+    # 项目根目录（用于用户目录安全校验）
+    project_root = _default_config_dir().parent
+
+    manager = BrowserManager(
+        browser_cfg.model_copy(update={"home_url": effective_home_url}),
+        project_root=project_root,
+    )
+
+    typer.echo("=" * 60)
+    typer.echo("boss-tool · browser-login 人工登录会话")
+    typer.echo("=" * 60)
+    typer.echo(f"用户目录: {manager.user_data_dir}")
+    typer.echo(f"首页:     {effective_home_url}")
+    typer.echo("会话模式: 可见浏览器 / 单账号 / 人工确认")
+    typer.echo("-" * 60)
+
+    # 启动浏览器
+    try:
+        session = manager.start()
+    except PlaywrightNotInstalledError as e:
+        typer.echo(f"[ERROR] {e}", err=True)
+        raise typer.Exit(code=3) from e
+    except ChromiumNotInstalledError as e:
+        typer.echo(f"[ERROR] {e}", err=True)
+        raise typer.Exit(code=4) from e
+    except BrowserStartFailedError as e:
+        typer.echo(f"[ERROR] 浏览器启动失败: {e}", err=True)
+        raise typer.Exit(code=5) from e
+    except HomePageOpenFailedError as e:
+        typer.echo(f"[ERROR] 首页打开失败: {e}", err=True)
+        manager.close(stop_reason=StopReason.UNKNOWN_ERROR)
+        raise typer.Exit(code=6) from e
+    except BrowserAlreadyRunningError as e:
+        typer.echo(f"[ERROR] {e}", err=True)
+        raise typer.Exit(code=7) from e
+
+    typer.echo("浏览器已启动并打开首页。")
+    typer.echo("请在浏览器中手动完成登录、扫码或安全验证。")
+    typer.echo("完成后回到终端输入 confirm。")
+    typer.echo("输入 quit 可退出。")
+    typer.echo("-" * 60)
+
+    # 命令循环
+    try:
+        _run_command_loop(manager, session)
+    except KeyboardInterrupt:
+        typer.echo("\n[INFO] 收到 Ctrl+C，正在安全退出...")
+        manager.close(stop_reason=StopReason.USER_ABORTED)
+    except Exception as e:
+        typer.echo(f"[ERROR] 会话异常: {type(e).__name__}", err=True)
+        manager.close(stop_reason=StopReason.UNKNOWN_ERROR, error_message=str(type(e).__name__))
+    finally:
+        # 确保资源已释放
+        if manager.is_running:
+            manager.close(stop_reason=StopReason.USER_ABORTED)
+        final = manager.session
+        if final is not None:
+            typer.echo("-" * 60)
+            typer.echo(f"会话状态: {final.state}")
+            typer.echo(f"用户确认: {final.user_confirmed}")
+            typer.echo(f"用户关闭: {final.browser_closed_by_user}")
+            typer.echo(f"停止原因: {final.stop_reason}")
+            if final.error_message:
+                typer.echo(f"异常:     {final.error_message}")
+            typer.echo(
+                "注意：本工具仅减少不必要访问与程序失控风险，"
+                "不能保证账号不受限制，不得用于规避平台检测。"
+            )
+
+
+def _run_command_loop(manager: BrowserManager, session) -> None:
+    """处理用户命令循环。
+
+    仅接受 confirm / quit / status，其他命令给出提示不退出。
+    空输入不视为确认。
+    """
+    while True:
+        # 检测浏览器是否已被用户关闭
+        if not manager.is_running:
+            typer.echo("[INFO] 浏览器已关闭（由用户或异常触发），会话结束。")
+            return
+
+        try:
+            cmd = typer.prompt("请输入命令 (confirm/quit/status)", default="", show_default=False)
+        except (EOFError, KeyboardInterrupt):
+            raise
+
+        cmd = (cmd or "").strip().lower()
+
+        if not cmd:
+            # 空输入不确认
+            typer.echo("[提示] 空输入无效。请输入 confirm / quit / status。")
+            continue
+
+        if cmd == "confirm":
+            manager.confirm_user()
+            typer.echo("[OK] 已记录用户确认。state=user_confirmed")
+            typer.echo("注意：confirm 仅代表用户自述已处理完成，不代表程序判断登录成功。")
+            # confirm 后继续保留会话，用户可继续操作或 quit 退出
+            continue
+
+        if cmd == "quit":
+            typer.echo("[INFO] 用户主动退出，正在安全关闭...")
+            manager.close(stop_reason=StopReason.USER_ABORTED)
+            return
+
+        if cmd == "status":
+            s = manager.session
+            if s is not None:
+                typer.echo(f"  session_id:          {s.session_id}")
+                typer.echo(f"  state:               {s.state}")
+                typer.echo(f"  user_confirmed:      {s.user_confirmed}")
+                typer.echo(f"  browser_closed_by_user: {s.browser_closed_by_user}")
+                typer.echo(f"  started_at:          {s.started_at}")
+                typer.echo(f"  ended_at:            {s.ended_at}")
+                typer.echo(f"  stop_reason:         {s.stop_reason}")
+                # last_known_url 已脱敏
+                typer.echo(f"  last_known_url:      {s.last_known_url}")
+            continue
+
+        typer.echo(f"[提示] 未知命令: {cmd!r}。仅接受 confirm / quit / status。")
 
 
 # ==================== 预留命令（P0 未实现） ====================

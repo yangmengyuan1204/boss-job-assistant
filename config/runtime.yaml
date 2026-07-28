@@ -39,6 +39,8 @@ revisit:
 browser:
   # 持久化用户目录（仅使用用户本人登录生成的本地目录）
   user_data_dir: "./user_data"
+  # 浏览器首页 URL（仅允许 BOSS 直聘白名单域名）
+  home_url: "https://www.zhipin.com/"
   # 必须为 false，强制可见浏览器
   headless: false
   # 必须为 true，单浏览器上下文

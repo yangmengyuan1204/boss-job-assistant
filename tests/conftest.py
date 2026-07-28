@@ -61,6 +61,40 @@ def copied_config_dir(tmp_workspace: Path, real_config_dir: Path) -> Path:
     return dst
 
 
+# ==================== 浏览器测试 fixtures ====================
+@pytest.fixture
+def fake_playwright_bundle(tmp_workspace: Path):
+    """返回一个 fake Playwright bundle，用于注入 BrowserManager。
+
+    bundle 含 page/context/chromium/ctx_manager/factory() 方法。
+    所有对象不访问真实网络。
+    """
+    from tests.browser_fakes import FakePlaywrightBundle
+
+    bundle = FakePlaywrightBundle()
+    return bundle
+
+
+@pytest.fixture
+def browser_config(tmp_workspace: Path):
+    """构造一个合法的 BrowserConfig，指向临时用户目录。"""
+    from boss_tool.config import BrowserConfig
+
+    return BrowserConfig(
+        user_data_dir=str(tmp_workspace / "user_data"),
+        home_url="https://www.zhipin.com/",
+        headless=False,
+        single_context=True,
+        single_account=True,
+    )
+
+
+@pytest.fixture
+def project_root() -> Path:
+    """项目根目录。"""
+    return Path(__file__).resolve().parent.parent
+
+
 @pytest.fixture(autouse=True)
 def _reset_logger():
     """每个测试前后重置 boss_tool logger 的 handlers，避免污染。"""
