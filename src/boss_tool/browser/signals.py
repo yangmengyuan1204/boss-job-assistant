@@ -51,6 +51,26 @@ class BrowserSessionState(str, Enum):
         return self in (BrowserSessionState.CLOSED, BrowserSessionState.FAILED)
 
 
+class CloseSource(str, Enum):
+    """浏览器关闭来源（用于区分用户关闭、异常断开与程序主动关闭）。
+
+    P1.1 新增：避免把所有非程序主动关闭一律标记为"用户关闭"。
+
+    取值：
+    - manager: BrowserManager.close() 主动调用
+    - page: 明确收到 page "close" 事件（可较可靠判断为用户关闭唯一工作页面）
+    - context: context 关闭但此前没有 page close 证据（来源不确定）
+    - startup_failure: 启动阶段失败
+    - unknown: 未知来源
+    """
+
+    MANAGER = "manager"
+    PAGE = "page"
+    CONTEXT = "context"
+    STARTUP_FAILURE = "startup_failure"
+    UNKNOWN = "unknown"
+
+
 # 允许的状态迁移
 _TRANSITIONS: dict[BrowserSessionState, frozenset[BrowserSessionState]] = {
     BrowserSessionState.CREATED: frozenset(
@@ -86,4 +106,4 @@ def can_transition(src: BrowserSessionState, dst: BrowserSessionState) -> bool:
     return dst in _TRANSITIONS.get(src, frozenset())
 
 
-__all__ = ["BrowserSessionState", "can_transition"]
+__all__ = ["BrowserSessionState", "CloseSource", "can_transition"]

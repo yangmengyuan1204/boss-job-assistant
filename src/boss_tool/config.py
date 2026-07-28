@@ -12,7 +12,6 @@
 from __future__ import annotations
 
 from pathlib import Path
-from urllib.parse import urlparse
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -94,31 +93,18 @@ class BrowserConfig(BaseModel):
     def _validate_home_url(cls, v: str) -> str:
         """校验首页 URL 格式与域名白名单。
 
-        要求：
-        - 必须为 http/https 协议
-        - host 必须在 ALLOWED_HOME_HOSTS 白名单内
-        - 不允许 localhost 或 IP 形式
+        P1.1：统一调用 boss_tool.browser.manager.validate_home_url()，
+        避免在 config / CLI / manager 出现三套不一致的校验逻辑。
+
+        严格要求：
+        - scheme 必须为 https
+        - host 必须在 ALLOWED_HOME_HOSTS 白名单
+        - 禁止 userinfo / 端口 / fragment / query
+        - 路径必须为 / 或空
         """
-        if not v or not v.strip():
-            raise ValueError("home_url 不能为空")
-        v = v.strip()
-        try:
-            parsed = urlparse(v)
-        except Exception as e:
-            raise ValueError(f"home_url 解析失败: {v}") from e
-        if parsed.scheme not in ("http", "https"):
-            raise ValueError(f"home_url 必须为 http/https 协议，当前为 {parsed.scheme!r} (url={v})")
-        if not parsed.netloc:
-            raise ValueError(f"home_url 缺少 host: {v}")
-        # 取 host（去掉端口）
-        host = parsed.hostname or ""
-        host = host.lower()
-        if host not in ALLOWED_HOME_HOSTS:
-            raise ValueError(
-                f"home_url host {host!r} 不在白名单 {sorted(ALLOWED_HOME_HOSTS)} 中，"
-                "仅允许 BOSS 直聘域名（www.zhipin.com / zhipin.com）"
-            )
-        return v
+        from boss_tool.browser.manager import validate_home_url
+
+        return validate_home_url(v)
 
     @field_validator("headless")
     @classmethod

@@ -40,7 +40,7 @@ from boss_tool.browser.exceptions import (
     PlaywrightNotInstalledError,
 )
 from boss_tool.browser.session import BrowserSession
-from boss_tool.browser.signals import BrowserSessionState
+from boss_tool.browser.signals import BrowserSessionState, CloseSource
 from boss_tool.config import ALLOWED_HOME_HOSTS, BrowserConfig
 from boss_tool.enums import StopReason
 from boss_tool.logging_config import get_logger
@@ -133,10 +133,79 @@ def redact_url(url: str | None) -> str | None:
     return result if result else url
 
 
-def is_home_url_allowed(url: str) -> bool:
-    """检查 URL host 是否在 BOSS 直聘白名单内。
+def validate_home_url(url: str) -> str:
+    """统一校验生产首页 URL 安全性。
 
-    仅允许 www.zhipin.com 和 zhipin.com。
+    P1.1 新增：Pydantic、CLI 覆盖参数、BrowserManager 均调用同一套逻辑。
+
+    严格要求：
+    1. scheme 必须为 https
+    2. hostname 必须严格属于 {www.zhipin.com, zhipin.com}
+    3. 禁止 userinfo（username/password）
+    4. 禁止显式非默认端口
+    5. 禁止 fragment
+    6. 禁止 query（防止 URL 中携带敏感参数）
+    7. 首页路径限制为 / 或空
+
+    Returns:
+        str: 校验通过后的 URL（原值，不做规范化以保持兼容）
+
+    Raises:
+        ValueError: 任何校验失败
+    """
+    if not url or not url.strip():
+        raise ValueError("home_url 不能为空")
+    url = url.strip()
+    try:
+        parsed = urlparse(url)
+    except (ValueError, TypeError) as e:
+        raise ValueError(f"home_url 解析失败: {url}") from e
+
+    # 1. scheme 严格为 https
+    if parsed.scheme != "https":
+        raise ValueError(
+            f"home_url 必须为 https 协议，当前为 {parsed.scheme!r} (url={redact_url(url)})"
+        )
+
+    # 2. host 严格在白名单内（hostname 会自动去掉端口与 userinfo）
+    host = (parsed.hostname or "").lower()
+    if host not in ALLOWED_HOME_HOSTS:
+        raise ValueError(
+            f"home_url host {host!r} 不在白名单 {sorted(ALLOWED_HOME_HOSTS)} 中，"
+            "仅允许 BOSS 直聘域名（www.zhipin.com / zhipin.com）"
+        )
+
+    # 3. 禁止 userinfo
+    if parsed.username or parsed.password:
+        raise ValueError("home_url 禁止包含 userinfo（username/password）")
+
+    # 4. 禁止显式非默认端口
+    if parsed.port is not None:
+        raise ValueError(f"home_url 禁止显式非默认端口: {parsed.port}")
+
+    # 5. 禁止 fragment
+    if parsed.fragment:
+        raise ValueError("home_url 禁止包含 fragment")
+
+    # 6. 禁止 query（防止携带 token 等敏感参数）
+    if parsed.query:
+        raise ValueError("home_url 禁止包含 query 参数")
+
+    # 7. 首页路径限制为 / 或空
+    if parsed.path not in ("", "/"):
+        raise ValueError(
+            f"home_url 首页路径必须为 / 或空，当前为 {parsed.path!r}（仅允许打开根路径）"
+        )
+
+    return url
+
+
+def is_home_url_allowed(url: str) -> bool:
+    """检查 URL host 是否在 BOSS 直聘白名单内（宽松检查，仅用于运行时二次校验）。
+
+    注意：严格校验请使用 validate_home_url()。
+    本函数仅用于 BrowserManager 启动时的二次防御性检查，
+    任何严格规则的失败已在 config/CLI 层通过 validate_home_url() 拒绝。
     """
     try:
         parsed = urlparse(url)
@@ -246,6 +315,7 @@ class BrowserManager:
         self._context: Any | None = None  # BrowserContext
         self._page: Any | None = None  # 工作页面
         self._closed_by_manager = False  # 是否由 manager 主动关闭（区分用户关闭）
+        self._page_close_observed = False  # P1.1：是否已观察到 page close 事件
 
         # 用户目录（绝对路径）
         self._user_data_dir: Path = validate_user_data_dir(
@@ -305,6 +375,7 @@ class BrowserManager:
         )
         self._session = session
         self._closed_by_manager = False
+        self._page_close_observed = False
 
         try:
             # 1. 启动 Playwright
@@ -344,6 +415,7 @@ class BrowserManager:
             session.mark_failed(
                 stop_reason=StopReason.UNKNOWN_ERROR,
                 error_message="playwright 包未安装",
+                close_source=CloseSource.STARTUP_FAILURE,
             )
             self._cleanup_resources()
             raise
@@ -351,6 +423,7 @@ class BrowserManager:
             session.mark_failed(
                 stop_reason=StopReason.UNKNOWN_ERROR,
                 error_message=str(e),
+                close_source=CloseSource.STARTUP_FAILURE,
             )
             self._cleanup_resources()
             raise
@@ -358,6 +431,7 @@ class BrowserManager:
             session.mark_failed(
                 stop_reason=StopReason.UNKNOWN_ERROR,
                 error_message="首页打开失败",
+                close_source=CloseSource.STARTUP_FAILURE,
             )
             self._cleanup_resources()
             raise
@@ -373,12 +447,14 @@ class BrowserManager:
                 session.mark_failed(
                     stop_reason=StopReason.UNKNOWN_ERROR,
                     error_message="chromium 未安装",
+                    close_source=CloseSource.STARTUP_FAILURE,
                 )
                 self._cleanup_resources()
                 raise err from e
             session.mark_failed(
                 stop_reason=StopReason.UNKNOWN_ERROR,
                 error_message=f"启动失败: {type(e).__name__}",
+                close_source=CloseSource.STARTUP_FAILURE,
             )
             self._cleanup_resources()
             raise BrowserStartFailedError(f"浏览器启动失败: {type(e).__name__}") from e
@@ -424,9 +500,11 @@ class BrowserManager:
     def _register_context_close_handler(self, context: Any) -> None:
         """注册 context 关闭事件处理器。
 
-        区分程序主动关闭与用户关闭：
-        - _closed_by_manager=True → 程序主动关闭，不标记 browser_closed_by_user
-        - _closed_by_manager=False → 用户关闭，标记 browser_closed_by_user
+        P1.1 改进关闭语义：
+        - _closed_by_manager=True → 程序主动关闭（close_source=manager）
+        - _closed_by_manager=False 且 _page_close_observed=True → page 先关闭触发的级联（close_source=page）
+        - _closed_by_manager=False 且 _page_close_observed=False → 来源不确定（close_source=context）
+          此时不声称为"用户关闭"，使用中性 stop_reason=BROWSER_CONTEXT_CLOSED
         """
 
         def _on_close() -> None:
@@ -434,15 +512,26 @@ class BrowserManager:
                 # 程序主动关闭，正常流程
                 logger.debug("context 关闭事件（程序主动关闭）")
                 return
-            # 用户关闭浏览器
-            logger.info("检测到浏览器由用户关闭")
             if self._session is not None and not self._session.state.is_terminal():
-                self._session.browser_closed_by_user = True
-                self._session.mark_closing()
-                self._session.mark_closed(
-                    stop_reason=StopReason.BROWSER_CLOSED,
-                    browser_closed_by_user=True,
-                )
+                if self._page_close_observed:
+                    # page 已先关闭，来源为 page
+                    logger.info("检测到 context 关闭（由 page 关闭级联触发）")
+                    self._session.mark_closing()
+                    self._session.mark_closed(
+                        stop_reason=StopReason.BROWSER_CLOSED,
+                        browser_closed_by_user=True,
+                        close_source=CloseSource.PAGE,
+                    )
+                else:
+                    # 未观察到 page close，来源不确定
+                    # 不声称为用户关闭，使用中性描述
+                    logger.info("检测到 context 关闭（来源不确定，不声称为用户关闭）")
+                    self._session.mark_closing()
+                    self._session.mark_closed(
+                        stop_reason=StopReason.BROWSER_CONTEXT_CLOSED,
+                        browser_closed_by_user=False,
+                        close_source=CloseSource.CONTEXT,
+                    )
 
         # 某些 mock 实现可能不支持 on，忽略
         with contextlib.suppress(Exception):
@@ -453,19 +542,22 @@ class BrowserManager:
 
         如果用户关闭唯一工作页面，标记 browser_closed_by_user 并结束会话。
         不自动重新打开 BOSS 页面。
+
+        P1.1：设置 _page_close_observed=True，供 context close 处理器判断级联来源。
         """
 
         def _on_page_close() -> None:
             if self._closed_by_manager:
                 return
             logger.info("检测到工作页面被关闭")
+            self._page_close_observed = True
             if self._session is not None and not self._session.state.is_terminal():
-                # 检查 context 是否还存在页面
                 self._session.browser_closed_by_user = True
                 self._session.mark_closing()
                 self._session.mark_closed(
                     stop_reason=StopReason.BROWSER_CLOSED,
                     browser_closed_by_user=True,
+                    close_source=CloseSource.PAGE,
                 )
 
         with contextlib.suppress(Exception):
@@ -511,6 +603,8 @@ class BrowserManager:
 
         幂等：重复调用不报错。
         不自动重启，不切换账号。
+
+        P1.1：标记 close_source=manager 以区分程序主动关闭与用户/异常关闭。
         """
         if self._session is None:
             # 完全未启动，直接返回
@@ -526,11 +620,12 @@ class BrowserManager:
         # 关闭资源
         self._cleanup_resources()
 
-        # 标记会话结束
+        # 标记会话结束（程序主动关闭，close_source=manager）
         self._session.mark_closed(
             stop_reason=stop_reason or StopReason.USER_ABORTED,
             error_message=error_message,
             browser_closed_by_user=False,
+            close_source=CloseSource.MANAGER,
         )
 
         logger.info(
@@ -569,5 +664,6 @@ __all__ = [
     "PlaywrightFactory",
     "validate_user_data_dir",
     "redact_url",
+    "validate_home_url",
     "is_home_url_allowed",
 ]

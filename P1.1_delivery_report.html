@@ -1,0 +1,450 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>P1.1 修复轮次交付报告</title>
+<style>
+  body { font-family: "Microsoft YaHei", -apple-system, "Helvetica Neue", Arial, sans-serif; line-height: 1.7; color: #222; max-width: 1180px; margin: 0 auto; padding: 24px; background: #f7f9fc; }
+  h1 { background: linear-gradient(90deg, #1e3a8a, #2563eb); color: #fff; padding: 18px 24px; border-radius: 8px; margin-bottom: 24px; font-size: 22px; box-shadow: 0 2px 8px rgba(30,58,138,.15); }
+  h2 { border-left: 5px solid #2563eb; padding-left: 14px; margin-top: 36px; font-size: 20px; color: #1e3a8a; background: #eef2ff; padding-top: 8px; padding-bottom: 8px; border-radius: 0 6px 6px 0; }
+  h3 { color: #1e40af; margin-top: 24px; font-size: 17px; }
+  table { border-collapse: collapse; width: 100%; margin: 14px 0; background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,.06); border-radius: 6px; overflow: hidden; }
+  th, td { border: 1px solid #e2e8f0; padding: 10px 12px; text-align: left; vertical-align: top; font-size: 14px; }
+  th { background: #1e3a8a; color: #fff; font-weight: 600; }
+  tr:nth-child(even) td { background: #f8fafc; }
+  code { background: #f1f5f9; padding: 2px 6px; border-radius: 4px; font-family: "Consolas", "Courier New", monospace; color: #be185d; font-size: 13px; }
+  pre { background: #0f172a; color: #e2e8f0; padding: 14px 18px; border-radius: 8px; overflow-x: auto; font-family: "Consolas", "Courier New", monospace; font-size: 13px; line-height: 1.55; }
+  pre code { background: transparent; color: inherit; padding: 0; }
+  .badge { display: inline-block; padding: 3px 10px; border-radius: 12px; font-size: 12px; font-weight: 600; color: #fff; }
+  .badge-ok { background: #16a34a; }
+  .badge-warn { background: #d97706; }
+  .badge-fail { background: #dc2626; }
+  .badge-info { background: #2563eb; }
+  .card { background: #fff; border-radius: 8px; padding: 16px 20px; box-shadow: 0 1px 4px rgba(0,0,0,.07); margin: 12px 0; border-left: 4px solid #2563eb; }
+  .card-warn { border-left-color: #d97706; background: #fffbeb; }
+  .card-ok { border-left-color: #16a34a; background: #f0fdf4; }
+  ul { padding-left: 22px; }
+  li { margin: 4px 0; }
+  .stat-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; margin: 14px 0; }
+  .stat-item { background: #fff; padding: 14px; border-radius: 6px; text-align: center; box-shadow: 0 1px 3px rgba(0,0,0,.06); }
+  .stat-value { font-size: 24px; font-weight: 700; color: #1e3a8a; }
+  .stat-label { font-size: 12px; color: #64748b; margin-top: 4px; }
+  .toc { background: #fff; padding: 14px 20px; border-radius: 6px; margin-bottom: 24px; box-shadow: 0 1px 3px rgba(0,0,0,.06); }
+  .toc a { color: #2563eb; text-decoration: none; }
+  .toc a:hover { text-decoration: underline; }
+  .footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid #e2e8f0; color: #64748b; font-size: 12px; text-align: center; }
+</style>
+</head>
+<body>
+
+<h1>P1.1 修复轮次交付报告 · BOSS直聘岗位辅助采集与筛选工具</h1>
+
+<div class="toc">
+  <strong>目录：</strong>
+  <a href="#summary">1. 总览</a> ·
+  <a href="#files">2. 修改文件列表</a> ·
+  <a href="#nonblock">3. CLI 非阻塞退出设计</a> ·
+  <a href="#url">4. URL 统一校验规则</a> ·
+  <a href="#close">5. 关闭来源语义</a> ·
+  <a href="#tests">6. 新增测试清单</a> ·
+  <a href="#pytest">7. pytest 输出</a> ·
+  <a href="#cov">8. coverage 输出</a> ·
+  <a href="#ruff">9. ruff 输出</a> ·
+  <a href="#format">10. format 输出</a> ·
+  <a href="#diff">11. git diff --stat</a> ·
+  <a href="#scope">12. 不进入 P2</a>
+</div>
+
+<h2 id="summary">1. 总览</h2>
+
+<div class="stat-grid">
+  <div class="stat-item"><div class="stat-value">10</div><div class="stat-label">修改/新增文件</div></div>
+  <div class="stat-item"><div class="stat-value">244</div><div class="stat-label">pytest 通过</div></div>
+  <div class="stat-item"><div class="stat-value">89%</div><div class="stat-label">代码覆盖率</div></div>
+  <div class="stat-item"><div class="stat-value">35</div><div class="stat-label">ruff 格式化文件</div></div>
+</div>
+
+<div class="card card-ok">
+  <strong>本轮修复目标：</strong> 仅修复 P1 阶段的阻塞问题与语义不清，<strong>不进入 P2</strong>。
+  <ul>
+    <li><span class="badge badge-ok">已修复</span> 浏览器关闭后 CLI 仍阻塞在 input 的问题</li>
+    <li><span class="badge badge-ok">已修复</span> 首页 URL 校验过宽（允许 HTTP / userinfo / port / query / fragment）</li>
+    <li><span class="badge badge-ok">已修复</span> CLI 直接输出原始 URL（含敏感 query）</li>
+    <li><span class="badge badge-ok">已修复</span> 关闭原因语义过粗（不区分 manager / page / context 来源）</li>
+  </ul>
+</div>
+
+<div class="card card-warn">
+  <strong>base commit：</strong> <code>8775a69af8dfd7d69e31bb76a29465bd210c4ed2</code>（P1: Playwright 可见浏览器基础设施、持久化用户目录、人工登录确认与安全退出）
+</div>
+
+<h2 id="files">2. 修改文件列表</h2>
+
+<table>
+  <thead>
+    <tr><th>文件路径</th><th>状态</th><th>说明</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>src/boss_tool/browser/commands.py</code></td><td><span class="badge badge-ok">新增</span></td><td>非阻塞命令源：CommandSource 协议、ThreadedCommandSource（daemon 输入线程 + queue.Queue）、FakeCommandSource（测试用）</td></tr>
+    <tr><td><code>src/boss_tool/browser/__init__.py</code></td><td><span class="badge badge-info">修改</span></td><td>导出 CommandSource / ThreadedCommandSource / FakeCommandSource / validate_home_url / CloseSource</td></tr>
+    <tr><td><code>src/boss_tool/browser/manager.py</code></td><td><span class="badge badge-info">修改</span></td><td>新增 <code>validate_home_url()</code> 统一校验函数；context/page close 处理器改为基于 <code>_page_close_observed</code> 区分来源；<code>close()</code> 标记 <code>close_source=manager</code></td></tr>
+    <tr><td><code>src/boss_tool/browser/session.py</code></td><td><span class="badge badge-info">修改</span></td><td>新增 <code>close_source</code> 字段；<code>mark_closed/mark_failed</code> 接受 <code>close_source</code> 参数</td></tr>
+    <tr><td><code>src/boss_tool/browser/signals.py</code></td><td><span class="badge badge-info">修改</span></td><td>新增 <code>CloseSource</code> 枚举（manager/page/context/startup_failure/unknown）</td></tr>
+    <tr><td><code>src/boss_tool/cli.py</code></td><td><span class="badge badge-info">修改</span></td><td>browser-login 命令循环改用 <code>_run_command_loop</code> 非阻塞轮询；输出脱敏 URL；调用统一 <code>validate_home_url</code></td></tr>
+    <tr><td><code>src/boss_tool/config.py</code></td><td><span class="badge badge-info">修改</span></td><td>移除独立的 host 白名单逻辑，调用 <code>validate_home_url</code></td></tr>
+    <tr><td><code>src/boss_tool/enums.py</code></td><td><span class="badge badge-info">修改</span></td><td>新增 <code>StopReason.BROWSER_CONTEXT_CLOSED</code>（context 关闭但来源不确定的中性描述）</td></tr>
+    <tr><td><code>tests/test_browser_cli.py</code></td><td><span class="badge badge-info">修改</span></td><td>新增非阻塞退出测试、URL 安全测试、close_source 语义测试、Ctrl+C 安全退出测试</td></tr>
+    <tr><td><code>tests/test_browser_manager.py</code></td><td><span class="badge badge-info">修改</span></td><td>新增 <code>TestValidateHomeUrl</code> 测试类覆盖所有拒绝场景；错误信息不泄露 token</td></tr>
+  </tbody>
+</table>
+
+<h2 id="nonblock">3. CLI 非阻塞退出设计</h2>
+
+<h3>3.1 设计目标</h3>
+<ul>
+  <li>用户在终端等待输入期间关闭浏览器 → CLI 立即结束，<strong>无需用户再次按回车</strong></li>
+  <li>唯一页面关闭 → 立即退出</li>
+  <li>context 关闭 → 立即退出</li>
+  <li>输入线程必须为 <strong>daemon</strong>，不阻止进程结束</li>
+  <li>不强制终止线程，不引入复杂异步框架</li>
+  <li>Ctrl+C 仍能安全退出</li>
+  <li>单元测试不真正读取终端</li>
+</ul>
+
+<h3>3.2 架构：CommandSource 协议 + daemon 输入线程</h3>
+
+<p>定义可注入接口：</p>
+<pre><code>class CommandSource(Protocol):
+    def start(self) -> None: ...
+    def poll(self, timeout: float) -> str | None: ...
+    def stop(self) -> None: ...</code></pre>
+
+<p>生产实现 <code>ThreadedCommandSource</code>：</p>
+<ul>
+  <li><strong>输入线程</strong>：daemon 线程，name=<code>boss-tool-cmd-reader</code>，循环调用 <code>input_func(prompt)</code> 并把结果放入 <code>queue.Queue</code></li>
+  <li><strong>主线程</strong>：在 <code>_run_command_loop</code> 中循环轮询三件事：
+    <ol>
+      <li><code>manager.is_running</code>（浏览器/context 是否还在）</li>
+      <li><code>session.state.is_terminal()</code>（session 是否终态）</li>
+      <li><code>command_source.poll(poll_interval)</code>（命令队列，超时即返回 None）</li>
+    </ol>
+  </li>
+  <li>任意一项满足即立即返回，无需用户输入</li>
+  <li><code>stop()</code> 仅标记状态并向队列放入 None 唤醒，<strong>不调用 <code>thread.join()</code></strong>，不强制终止线程</li>
+</ul>
+
+<h3>3.3 主循环关键逻辑</h3>
+<pre><code>while True:
+    # 1. 浏览器已关闭 → 立即退出（无需输入）
+    if not manager.is_running:
+        typer.echo("[INFO] 浏览器已关闭（由用户或异常触发），会话结束。")
+        return
+    # 2. session 已终态 → 立即退出
+    if session.state.is_terminal():
+        typer.echo("[INFO] 会话已结束。")
+        return
+    # 3. 非阻塞轮询命令（poll_interval 秒超时即返回 None）
+    cmd = command_source.poll(timeout=poll_interval)
+    if cmd is None:
+        continue  # 无命令，继续检查浏览器状态
+    # ... 处理 confirm / quit / status</code></pre>
+
+<h3>3.4 测试可注入</h3>
+<p>测试通过 <code>FakeCommandSource</code> 预置命令队列直接注入 <code>_run_command_loop(command_source=...)</code>，不通过 CliRunner input=，<strong>不读取真实终端</strong>。</p>
+
+<h3>3.5 修复记录：测试 hang 问题</h3>
+<div class="card card-warn">
+  <strong>P1.1 验证过程中发现的额外问题：</strong>
+  <p>初版 <code>FakeCommandSource.poll()</code> 在 <code>start()</code> 未调用时直接返回 <code>None</code>，导致主循环因 <code>manager.is_running=True</code> 且命令源持续返回 None 而无限轮询。</p>
+  <strong>修复：</strong> <code>poll()</code> 不再依赖 <code>_started</code> 标志，<code>_started</code> 仅用于协议一致性。修复后 244 个测试全部通过。</div>
+
+<h2 id="url">4. URL 统一校验规则</h2>
+
+<h3>4.1 统一入口</h3>
+<p>新增公共函数 <code>validate_home_url(url: str) -> str</code>（位于 <code>src/boss_tool/browser/manager.py</code>），Pydantic、CLI 覆盖参数、BrowserManager 均调用同一套逻辑，消除 config.py / cli.py / manager.py 三处重复校验。</p>
+
+<h3>4.2 严格规则</h3>
+<table>
+  <thead><tr><th>#</th><th>规则</th><th>拒绝示例</th></tr></thead>
+  <tbody>
+    <tr><td>1</td><td>scheme 必须严格等于 <code>https</code></td><td><code>http://www.zhipin.com/</code></td></tr>
+    <tr><td>2</td><td>hostname 必须严格属于 <code>{"www.zhipin.com", "zhipin.com"}</code></td><td><code>https://www.zhipin.com.evil.com/</code></td></tr>
+    <tr><td>3</td><td>禁止 <code>parsed.username</code></td><td><code>https://user@www.zhipin.com/</code></td></tr>
+    <tr><td>4</td><td>禁止 <code>parsed.password</code></td><td><code>https://user:pass@www.zhipin.com/</code></td></tr>
+    <tr><td>5</td><td>禁止显式非默认端口（<code>parsed.port is not None</code>）</td><td><code>https://www.zhipin.com:8443/</code></td></tr>
+    <tr><td>6</td><td>禁止 fragment</td><td><code>https://www.zhipin.com/#fragment</code></td></tr>
+    <tr><td>7</td><td>禁止 query（防止携带 token 等敏感参数）</td><td><code>https://www.zhipin.com/?token=secret</code></td></tr>
+    <tr><td>8</td><td>首页路径限制为 <code>/</code> 或空</td><td><code>https://www.zhipin.com/job/123</code></td></tr>
+  </tbody>
+</table>
+
+<h3>4.3 允许的 URL</h3>
+<pre><code>https://www.zhipin.com/
+https://zhipin.com/</code></pre>
+
+<h3>4.4 恶意相似域名防护</h3>
+<p><code>urlparse</code> 的 <code>hostname</code> 会自动去掉端口与 userinfo，但对 <code>evil.com@www.zhipin.com</code> 这类 userinfo 注入，规则 3/4 直接拒绝；对 <code>www.zhipin.com.evil.com</code> 这类相似域名，规则 2（hostname 不在白名单）直接拒绝。</p>
+
+<h3>4.5 错误信息脱敏</h3>
+<p>所有 ValueError 错误信息仅引用 <code>redact_url(url)</code> 的脱敏形式，<strong>不出现 query 参数原值</strong>。已通过 <code>test_error_message_does_not_contain_token</code> 验证：错误信息中不含 <code>supersecret</code>。</p>
+
+<h3>4.6 CLI 输出脱敏</h3>
+<p>原代码 <code>typer.echo(f"首页: {effective_home_url}")</code> 改为：</p>
+<pre><code>typer.echo(f"首页:     {redact_url(effective_home_url)}")</code></pre>
+<p>日志同样使用脱敏 URL，<strong>不输出未经脱敏的 URL</strong>。</p>
+
+<h2 id="close">5. 关闭来源语义</h2>
+
+<h3>5.1 问题</h3>
+<p>原代码 context/page 只要不是 manager 主动关闭就全部标记 <code>browser_closed_by_user=True</code>，无法区分用户主动关闭与异常断开。</p>
+
+<h3>5.2 新增 CloseSource 枚举</h3>
+<pre><code>class CloseSource(str, Enum):
+    MANAGER = "manager"              # BrowserManager.close() 主动调用
+    PAGE = "page"                    # 明确收到 page "close" 事件
+    CONTEXT = "context"              # context 关闭但此前无 page close 证据
+    STARTUP_FAILURE = "startup_failure"  # 启动阶段失败
+    UNKNOWN = "unknown"              # 未知来源</code></pre>
+
+<h3>5.3 判定规则</h3>
+<table>
+  <thead><tr><th>触发场景</th><th>close_source</th><th>browser_closed_by_user</th><th>stop_reason</th></tr></thead>
+  <tbody>
+    <tr><td>manager 主动调用 <code>close()</code></td><td><code>manager</code></td><td><code>False</code></td><td>调用方传入（如 USER_ABORTED）</td></tr>
+    <tr><td>page 收到 close 事件</td><td><code>page</code></td><td><code>True</code></td><td><code>BROWSER_CLOSED</code></td></tr>
+    <tr><td>context 收到 close 事件，<strong>且此前已观察到 page close</strong></td><td><code>page</code>（级联）</td><td><code>True</code></td><td><code>BROWSER_CLOSED</code></td></tr>
+    <tr><td>context 收到 close 事件，<strong>但此前未观察到 page close</strong></td><td><code>context</code></td><td><code>False</code></td><td><code>BROWSER_CONTEXT_CLOSED</code>（中性，不声称为用户行为）</td></tr>
+    <tr><td>启动阶段失败</td><td><code>startup_failure</code></td><td><code>False</code></td><td><code>UNKNOWN_ERROR</code></td></tr>
+  </tbody>
+</table>
+
+<h3>5.4 实现要点</h3>
+<ul>
+  <li>新增 <code>self._page_close_observed = False</code> 标志，page close 事件触发时置为 True</li>
+  <li>context close 处理器检查该标志：若 True 则视为 page 级联，否则视为来源不确定</li>
+  <li><strong>不伪造"用户关闭"</strong>：context 来源时 <code>browser_closed_by_user=False</code>，<code>stop_reason=BROWSER_CONTEXT_CLOSED</code></li>
+  <li>新增 <code>StopReason.BROWSER_CONTEXT_CLOSED = "browser_context_closed"</code> 中性描述</li>
+  <li>幂等：终态会话不再触发状态迁移（<code>session.state.is_terminal()</code> 检查）</li>
+</ul>
+
+<h3>5.5 数据模型兼容性</h3>
+<p><code>close_source</code> 字段为可选（<code>CloseSource | None</code>），向后兼容；旧数据 <code>close_source=None</code> 不受影响。</p>
+
+<h2 id="tests">6. 新增测试清单</h2>
+
+<h3>6.1 CLI 非阻塞退出（<code>TestNonBlockingExit</code>）</h3>
+<table>
+  <thead><tr><th>测试</th><th>验证</th></tr></thead>
+  <tbody>
+    <tr><td><code>test_browser_closed_exits_without_input</code></td><td>浏览器关闭时无终端输入也能退出</td></tr>
+    <tr><td><code>test_page_closed_exits_without_input</code></td><td>唯一页面关闭时无终端输入也能退出</td></tr>
+    <tr><td><code>test_context_closed_exits_without_input</code></td><td>context 关闭时无终端输入也能退出</td></tr>
+    <tr><td><code>test_daemon_thread_does_not_block_exit</code></td><td>daemon 输入线程不阻止进程结束（1 秒内退出）</td></tr>
+    <tr><td><code>test_command_source_can_be_injected</code></td><td>command_source 可注入 fake 测试</td></tr>
+    <tr><td><code>test_no_residual_non_daemon_threads</code></td><td>不产生后台残留的非 daemon 线程</td></tr>
+  </tbody>
+</table>
+
+<h3>6.2 URL 安全（<code>TestValidateHomeUrl</code> + <code>TestBrowserLoginConfigValidation</code>）</h3>
+<table>
+  <thead><tr><th>测试</th><th>验证</th></tr></thead>
+  <tbody>
+    <tr><td><code>test_https_www_zhipin_allowed</code></td><td>HTTPS 官方根路径允许</td></tr>
+    <tr><td><code>test_https_zhipin_no_www_allowed</code></td><td>HTTPS 无 www 允许</td></tr>
+    <tr><td><code>test_http_rejected</code></td><td>HTTP 拒绝</td></tr>
+    <tr><td><code>test_port_rejected</code></td><td>显式非默认端口拒绝</td></tr>
+    <tr><td><code>test_username_rejected</code></td><td>username 拒绝</td></tr>
+    <tr><td><code>test_password_rejected</code></td><td>password 拒绝</td></tr>
+    <tr><td><code>test_query_rejected</code></td><td>query 拒绝</td></tr>
+    <tr><td><code>test_fragment_rejected</code></td><td>fragment 拒绝</td></tr>
+    <tr><td><code>test_evil_lookalike_rejected</code></td><td><code>www.zhipin.com.evil.com</code> 拒绝</td></tr>
+    <tr><td><code>test_evil_userinfo_rejected</code></td><td><code>evil.com@www.zhipin.com</code> 拒绝</td></tr>
+    <tr><td><code>test_non_root_path_rejected</code></td><td>非根路径拒绝</td></tr>
+    <tr><td><code>test_empty_url_rejected</code></td><td>空 URL 拒绝</td></tr>
+    <tr><td><code>test_error_message_does_not_contain_token</code></td><td>错误信息不泄露 query token 值</td></tr>
+    <tr><td><code>test_cli_output_does_not_contain_query</code></td><td>CLI 输出不包含 token/password 等 query</td></tr>
+  </tbody>
+</table>
+
+<h3>6.3 关闭语义（<code>TestBrowserManagerCloseSemantics</code> 等）</h3>
+<table>
+  <thead><tr><th>测试</th><th>验证</th></tr></thead>
+  <tbody>
+    <tr><td>manager 主动关闭</td><td><code>close_source=manager</code>，<code>browser_closed_by_user=False</code></td></tr>
+    <tr><td>page close 事件</td><td><code>close_source=page</code>，<code>browser_closed_by_user=True</code></td></tr>
+    <tr><td>context close（无 page close 证据）</td><td><code>close_source=context</code>，<code>browser_closed_by_user=False</code>，<code>stop_reason=BROWSER_CONTEXT_CLOSED</code></td></tr>
+    <tr><td>重复 page/context 事件</td><td>不触发非法状态迁移（终态检查幂等）</td></tr>
+  </tbody>
+</table>
+
+<h3>6.4 Ctrl+C 安全退出（<code>TestCtrlCExit</code>）</h3>
+<table>
+  <thead><tr><th>测试</th><th>验证</th></tr></thead>
+  <tbody>
+    <tr><td><code>test_ctrl_c_safe_exit</code></td><td>KeyboardInterrupt 向上抛出，外层捕获并安全关闭</td></tr>
+  </tbody>
+</table>
+
+<h3>6.5 命令循环（<code>TestCommandLoop</code>）</h3>
+<table>
+  <thead><tr><th>测试</th><th>验证</th></tr></thead>
+  <tbody>
+    <tr><td><code>test_quit_exits_safely</code></td><td>quit 触发 close，stop_reason=USER_ABORTED</td></tr>
+    <tr><td><code>test_confirm_sets_user_confirmed</code></td><td>confirm 调用 manager.confirm_user</td></tr>
+    <tr><td><code>test_status_shows_session_info</code></td><td>status 输出 session_id / state 等信息</td></tr>
+    <tr><td><code>test_empty_input_does_not_confirm</code></td><td>空输入不视为确认</td></tr>
+    <tr><td><code>test_invalid_command_does_not_exit</code></td><td>未知命令提示且不退出</td></tr>
+    <tr><td><code>test_confirm_does_not_claim_login_verified</code></td><td>confirm 不声称"已验证登录"</td></tr>
+  </tbody>
+</table>
+
+<h2 id="pytest">7. pytest 输出</h2>
+
+<div class="card card-ok">
+  <strong>命令：</strong> <code>python -m pytest --cov=src/boss_tool --cov-report=term-missing</code>
+</div>
+
+<pre><code>============================= test session starts =============================
+platform win32 -- Python 3.10.11, pytest-9.1.1, pluggy-1.6.0
+rootdir: D:\A_pachong\boss-job-assistant
+configfile: pyproject.toml
+testpaths: tests
+plugins: cov-7.1.0
+collected 244 items
+
+tests\test_browser_cli.py ...............................                [ 12%]
+tests\test_browser_manager.py .......................................... [ 29%]
+..............................                                           [ 42%]
+tests\test_browser_session.py ...........................                [ 53%]
+tests\test_cli.py ............                                           [ 58%]
+tests\test_config.py .....................                               [ 66%]
+tests\test_database.py ...................................               [ 81%]
+tests\test_models.py ..............................................      [100%]
+
+============================ 244 passed in 28.46s =============================
+</code></pre>
+
+<p><span class="badge badge-ok">通过</span> 244 个测试全部通过，0 失败，0 错误。</p>
+
+<h2 id="cov">8. coverage 输出</h2>
+
+<pre><code>=============================== tests coverage ================================
+______________ coverage: platform win32, python 3.10.11-final-0 _______________
+
+Name                                    Stmts   Miss Branch BrPart  Cover   Missing
+-----------------------------------------------------------------------------------
+src\boss_tool\__init__.py                   2      0      0      0   100%
+src\boss_tool\browser\__init__.py           7      0      0      0   100%
+src\boss_tool\browser\commands.py          89     22     16      7    70%   37, 48, 52, 86, 99, 106, 115, 123->exit, 131-134, 137-138, 164, 175-181, 184, 188, 193
+src\boss_tool\browser\exceptions.py        11      0      0      0   100%
+src\boss_tool\browser\manager.py          258     33     78      7    88%   79-80, 108, 128-129, 161-162, 212-213, 228, 240-252, 268-275, 346, 454-460, 470-471, 518-520, 570, 584, 592->exit, 645->647
+src\boss_tool\browser\session.py           58      0     14      1    99%   153->exit
+src\boss_tool\browser\signals.py           22      0      0      0   100%
+src\boss_tool\cli.py                      318     58     44     15    79%   80-82, 96, 119, 131->199, 139-141, 149-151, 159-161, 168-170, 182-185, 194-196, 201->205, 207-210, 339-340, 342-343, 345-346, 377-392, 410-415, 421, 423->exit, 430->432, 462, 472-473, 502->513
+src\boss_tool\config.py                   205      5     32      5    96%   210, 296, 380, 382, 408
+src\boss_tool\enums.py                    105      0      0      0   100%
+src\boss_tool\exporters\__init__.py         0      0      0      0   100%
+src\boss_tool\logging_config.py            55      7     18      5    84%   53-57, 97->104, 104->119, 132, 134
+src\boss_tool\models\age.py                56      4     34      4    91%   104, 109, 111, 122
+src\boss_tool\models\collection.py         21      0      0      0   100%
+src\boss_tool\models\job.py                57      1      4      1    97%   100
+src\boss_tool\models\physical.py           33      2      4      2    89%   46, 48
+src\boss_tool\models\recruiter.py          11      0      0      0   100%
+src\boss_tool\models\run.py                26      0      0      0   100%
+src\boss_tool\parsers\__init__.py           0      0      0      0   100%
+src\boss_tool\services\__init__.py          0      0      0      0   100%
+src\boss_tool\storage\__init__.py           0      0      0      0   100%
+src\boss_tool\storage\database.py          93      2     16      4    94%   336->exit, 344, 407, 427->exit
+src\boss_tool\storage\migrations.py         7      7      0      0     0%   12-27
+src\boss_tool\storage\repositories.py     148      7     36      2    95%   47, 67, 76-77, 695-697
+-----------------------------------------------------------------------------------
+TOTAL                                    1582    148    296     53    89%
+</code></pre>
+
+<p><span class="badge badge-ok">通过</span> 总覆盖率 <strong>89%</strong>（≥80% 要求）。</p>
+
+<div class="card card-warn">
+  <strong>未覆盖说明：</strong>
+  <ul>
+    <li><code>storage/migrations.py</code> 0%：P0 阶段占位模块，未实现迁移逻辑（不在 P1.1 范围）</li>
+    <li><code>browser/commands.py</code> 70%：ThreadedCommandSource 的真实 input 阻塞路径与 stop 唤醒路径在单元测试中难以覆盖（涉及真实终端 IO），核心非阻塞轮询逻辑已 100% 覆盖</li>
+    <li><code>cli.py</code> 79%：browser-login 真实启动浏览器的异常分支（PlaywrightNotInstalledError 等）需真实环境，已通过 mock 覆盖核心路径</li>
+  </ul>
+</div>
+
+<h2 id="ruff">9. ruff 输出</h2>
+
+<div class="card card-ok">
+  <strong>命令：</strong> <code>python -m ruff check .</code>
+</div>
+
+<pre><code>All checks passed!
+EXIT: 0</code></pre>
+
+<p><span class="badge badge-ok">通过</span> ruff check 全部通过。</p>
+
+<h2 id="format">10. format 输出</h2>
+
+<div class="card card-ok">
+  <strong>命令：</strong> <code>python -m ruff format --check src tests</code>
+</div>
+
+<pre><code>35 files already formatted
+EXIT: 0</code></pre>
+
+<p><span class="badge badge-ok">通过</span> ruff format 检查全部通过，35 个文件均已格式化。</p>
+
+<h3>10.1 black 检查（环境限制）</h3>
+<div class="card card-warn">
+  <strong>如实记录：</strong> 本环境运行 <code>python -m black --check .</code> 持续挂起（即便单文件 <code>black --check src/boss_tool/browser/commands.py</code> 也无法在 60 秒内返回），属于环境问题，<strong>非伪造结果</strong>。
+  <p>按用户要求"如black可用，再执行；不得伪造black结果"，black 在该环境<strong>不可用</strong>，故以 <code>ruff format --check</code>（与 black 格式化标准一致）作为格式化验证依据。</p>
+  <p>后续若在 black 可用的环境中运行，建议执行 <code>python -m black --check src tests</code> 复核。</p>
+</div>
+
+<h2 id="diff">11. git diff --stat</h2>
+
+<pre><code> src/boss_tool/browser/__init__.py |  19 +-
+ src/boss_tool/browser/commands.py | 200 +++++++++++++
+ src/boss_tool/browser/manager.py  | 128 +++++++-
+ src/boss_tool/browser/session.py  |  33 ++-
+ src/boss_tool/browser/signals.py  |  22 +-
+ src/boss_tool/cli.py              |  98 +++++--
+ src/boss_tool/config.py           |  36 +--
+ src/boss_tool/enums.py            |   1 +
+ tests/test_browser_cli.py         | 603 +++++++++++++++++++++++++++-----------
+ tests/test_browser_manager.py     | 144 ++++++++-
+ 10 files changed, 1047 insertions(+), 237 deletions(-)</code></pre>
+
+<p><strong>总计：</strong> 10 个文件，新增 1 个（<code>commands.py</code>），修改 9 个，+1047/-237 行。</p>
+
+<h2 id="scope">12. 不进入 P2</h2>
+
+<div class="card card-ok">
+  <strong>本轮严格遵守不扩大范围原则，未实现以下任何 P2+ 功能：</strong>
+  <ul>
+    <li>登录状态判断</li>
+    <li>DOM 选择器</li>
+    <li>岗位搜索</li>
+    <li>翻页</li>
+    <li>详情页访问</li>
+    <li>页面解析</li>
+    <li>页面 HTML 保存</li>
+    <li>截图</li>
+    <li>Cookie 读取</li>
+    <li>localStorage 读取</li>
+    <li>自动刷新 / 自动重启 / 自动重新登录</li>
+    <li>验证码处理</li>
+    <li>任何反检测功能（stealth / 指纹修改 / webdriver 标志隐藏等）</li>
+  </ul>
+</div>
+
+<div class="card">
+  <strong>安全声明（保留）：</strong> 本工具仅减少不必要访问与程序失控风险，不能保证账号不受限制，不得用于规避平台检测。
+</div>
+
+<div class="footer">
+  P1.1 修复轮次交付报告 · 生成于 2026-07-28 · BOSS直聘岗位辅助采集与筛选工具
+</div>
+
+</body>
+</html>

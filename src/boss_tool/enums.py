@@ -154,6 +154,7 @@ class StopReason(_StrEnum):
     BUDGET_REACHED = "budget_reached"
     USER_ABORTED = "user_aborted"
     BROWSER_CLOSED = "browser_closed"
+    BROWSER_CONTEXT_CLOSED = "browser_context_closed"
     CAPTCHA = "captcha"
     SLIDER_VERIFICATION = "slider_verification"
     SMS_VERIFICATION = "sms_verification"

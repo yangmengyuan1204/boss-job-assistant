@@ -129,6 +129,96 @@ class TestIsHomeUrlAllowed:
         assert is_home_url_allowed("not-a-url") is False
 
 
+# ==================== validate_home_url（P1.1 新增） ====================
+class TestValidateHomeUrl:
+    """P1.1：统一 URL 校验函数测试。
+
+    覆盖所有必须拒绝的场景：http/端口/userinfo/query/fragment/恶意相似域名等。
+    """
+
+    def test_https_www_zhipin_allowed(self):
+        from boss_tool.browser.manager import validate_home_url
+
+        assert validate_home_url("https://www.zhipin.com/") == "https://www.zhipin.com/"
+
+    def test_https_zhipin_no_www_allowed(self):
+        from boss_tool.browser.manager import validate_home_url
+
+        assert validate_home_url("https://zhipin.com/") == "https://zhipin.com/"
+
+    def test_http_rejected(self):
+        from boss_tool.browser.manager import validate_home_url
+
+        with pytest.raises(ValueError, match="https"):
+            validate_home_url("http://www.zhipin.com/")
+
+    def test_port_rejected(self):
+        from boss_tool.browser.manager import validate_home_url
+
+        with pytest.raises(ValueError, match="端口"):
+            validate_home_url("https://www.zhipin.com:8443/")
+
+    def test_username_rejected(self):
+        from boss_tool.browser.manager import validate_home_url
+
+        with pytest.raises(ValueError, match="userinfo"):
+            validate_home_url("https://user@www.zhipin.com/")
+
+    def test_password_rejected(self):
+        from boss_tool.browser.manager import validate_home_url
+
+        with pytest.raises(ValueError, match="userinfo"):
+            validate_home_url("https://user:pass@www.zhipin.com/")
+
+    def test_query_rejected(self):
+        from boss_tool.browser.manager import validate_home_url
+
+        with pytest.raises(ValueError, match="query"):
+            validate_home_url("https://www.zhipin.com/?token=secret")
+
+    def test_fragment_rejected(self):
+        from boss_tool.browser.manager import validate_home_url
+
+        with pytest.raises(ValueError, match="fragment"):
+            validate_home_url("https://www.zhipin.com/#fragment")
+
+    def test_evil_lookalike_rejected(self):
+        """相似恶意域名 www.zhipin.com.evil.com 被拒绝。"""
+        from boss_tool.browser.manager import validate_home_url
+
+        with pytest.raises(ValueError, match="白名单"):
+            validate_home_url("https://www.zhipin.com.evil.com/")
+
+    def test_evil_userinfo_rejected(self):
+        """evil.com@www.zhipin.com 形式被拒绝。"""
+        from boss_tool.browser.manager import validate_home_url
+
+        with pytest.raises(ValueError, match="userinfo"):
+            validate_home_url("https://evil.com@www.zhipin.com/")
+
+    def test_non_root_path_rejected(self):
+        """P1.1：首页路径限制为 / 或空，其他路径拒绝。"""
+        from boss_tool.browser.manager import validate_home_url
+
+        with pytest.raises(ValueError, match="路径"):
+            validate_home_url("https://www.zhipin.com/job/123")
+
+    def test_empty_url_rejected(self):
+        from boss_tool.browser.manager import validate_home_url
+
+        with pytest.raises(ValueError, match="空"):
+            validate_home_url("")
+
+    def test_error_message_does_not_contain_token(self):
+        """P1.1：错误信息中不应出现敏感 query 值。"""
+        from boss_tool.browser.manager import validate_home_url
+
+        with pytest.raises(ValueError, match="query") as exc_info:
+            validate_home_url("https://www.zhipin.com/?token=supersecret")
+        # 错误信息中不应出现 token 值
+        assert "supersecret" not in str(exc_info.value)
+
+
 # ==================== BrowserManager 基础 ====================
 class TestBrowserManagerStart:
     def test_start_success_uses_launch_persistent_context(
@@ -449,16 +539,66 @@ class TestBrowserCloseDetection:
     def test_user_closes_context_marks_browser_closed_by_user(
         self, browser_config, project_root, fake_playwright_bundle
     ):
-        """用户关闭 context 后 browser_closed_by_user=True。"""
+        """P1.1 语义更新：context 关闭但无 page close 证据时，不声称为用户关闭。
+
+        - browser_closed_by_user=False（来源不确定，不伪造"用户关闭"）
+        - close_source=CloseSource.CONTEXT
+        - stop_reason=BROWSER_CONTEXT_CLOSED（中性描述）
+        """
+        from boss_tool.browser.signals import CloseSource
+
         manager = BrowserManager(
             browser_config,
             project_root=project_root,
             playwright_factory=fake_playwright_bundle.factory(),
         )
         manager.start()
-        # 模拟用户关闭 context
+        # 模拟 context 关闭（无 page close 先发生）
         fake_playwright_bundle.context.trigger_close()
+        # 不声称为用户关闭
+        assert manager.session.browser_closed_by_user is False
+        assert manager.session.close_source == CloseSource.CONTEXT
+        assert manager.session.stop_reason == StopReason.BROWSER_CONTEXT_CLOSED
+        assert manager.session.state == BrowserSessionState.CLOSED
+
+    def test_context_close_after_page_close_marks_as_page_source(
+        self, browser_config, project_root, fake_playwright_bundle
+    ):
+        """P1.1 新增：page 先关闭触发 context 级联关闭时，来源标记为 page。"""
+        from boss_tool.browser.signals import CloseSource
+
+        manager = BrowserManager(
+            browser_config,
+            project_root=project_root,
+            playwright_factory=fake_playwright_bundle.factory(),
+        )
+        manager.start()
+        # 先关闭 page（设置 _page_close_observed=True）
+        fake_playwright_bundle.page.trigger_close()
+        # 此时 session 已被 page close 处理器标记为 CLOSED
+        # context close 处理器不应再次触发非法迁移
+        fake_playwright_bundle.context.trigger_close()
+        # 来源为 page（page close 先观察到）
+        assert manager.session.close_source == CloseSource.PAGE
         assert manager.session.browser_closed_by_user is True
+        assert manager.session.stop_reason == StopReason.BROWSER_CLOSED
+
+    def test_programmatic_close_marks_manager_source(
+        self, browser_config, project_root, fake_playwright_bundle
+    ):
+        """P1.1 新增：程序主动 close 标记 close_source=manager。"""
+        from boss_tool.browser.signals import CloseSource
+
+        manager = BrowserManager(
+            browser_config,
+            project_root=project_root,
+            playwright_factory=fake_playwright_bundle.factory(),
+        )
+        manager.start()
+        manager.close(stop_reason=StopReason.USER_ABORTED)
+        assert manager.session.close_source == CloseSource.MANAGER
+        assert manager.session.browser_closed_by_user is False
+        assert manager.session.stop_reason == StopReason.USER_ABORTED
 
     def test_programmatic_close_not_marked_as_user_closed(
         self, browser_config, project_root, fake_playwright_bundle

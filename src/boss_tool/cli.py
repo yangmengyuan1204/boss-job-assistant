@@ -10,6 +10,12 @@
 - resume         # 预留（P0 未实现）
 - export         # 预留（P0 未实现）
 
+P1.1 修复：
+- browser-login 命令循环改为非阻塞轮询（CommandSource + daemon 输入线程）
+- 浏览器关闭后无需用户在终端按回车即可退出
+- 首页 URL 统一调用 validate_home_url 严格校验
+- CLI 输出与日志使用 redact_url 脱敏
+
 预留命令执行时必须输出明确提示，而非异常堆栈。
 """
 
@@ -21,7 +27,6 @@ import os
 import sys
 import tempfile
 from pathlib import Path
-from urllib.parse import urlparse
 
 import typer
 
@@ -30,10 +35,15 @@ from boss_tool.browser import (
     BrowserManager,
     BrowserStartFailedError,
     ChromiumNotInstalledError,
+    CommandSource,
+    FakeCommandSource,
     HomePageOpenFailedError,
     PlaywrightNotInstalledError,
+    ThreadedCommandSource,
+    redact_url,
+    validate_home_url,
 )
-from boss_tool.config import ALLOWED_HOME_HOSTS, load_config
+from boss_tool.config import load_config
 from boss_tool.enums import StopReason
 from boss_tool.logging_config import get_logger, setup_logging
 from boss_tool.storage.database import CURRENT_SCHEMA_VERSION, Database
@@ -309,6 +319,8 @@ def browser_login(
     5. 用户在浏览器手动完成登录/扫码/验证
     6. 回到终端输入 confirm / quit / status
 
+    P1.1：命令循环改为非阻塞轮询，浏览器关闭后无需用户在终端按回车即可退出。
+
     安全规则：
     - 不自动处理任何验证码 / 滑块 / 短信
     - 不自动登录、不自动重试
@@ -333,16 +345,14 @@ def browser_login(
         typer.echo("[ERROR] 配置错误：allow_background 必须为 false", err=True)
         raise typer.Exit(code=2)
 
-    # 解析首页 URL
+    # 解析首页 URL：--home-url 优先，否则使用配置
     effective_home_url = home_url or browser_cfg.home_url
-    # 二次校验白名单
-    host = (urlparse(effective_home_url).hostname or "").lower()
-    if host not in ALLOWED_HOME_HOSTS:
-        typer.echo(
-            f"[ERROR] home_url host {host!r} 不在白名单 {sorted(ALLOWED_HOME_HOSTS)} 中",
-            err=True,
-        )
-        raise typer.Exit(code=2)
+    # 统一调用 validate_home_url 严格校验（scheme/host/userinfo/port/query/fragment/path）
+    try:
+        effective_home_url = validate_home_url(effective_home_url)
+    except ValueError as e:
+        typer.echo(f"[ERROR] home_url 校验失败: {e}", err=True)
+        raise typer.Exit(code=2) from e
 
     # 项目根目录（用于用户目录安全校验）
     project_root = _default_config_dir().parent
@@ -356,7 +366,8 @@ def browser_login(
     typer.echo("boss-tool · browser-login 人工登录会话")
     typer.echo("=" * 60)
     typer.echo(f"用户目录: {manager.user_data_dir}")
-    typer.echo(f"首页:     {effective_home_url}")
+    # P1.1：输出脱敏后的 URL（防御性，即使严格校验也保持脱敏习惯）
+    typer.echo(f"首页:     {redact_url(effective_home_url)}")
     typer.echo("会话模式: 可见浏览器 / 单账号 / 人工确认")
     typer.echo("-" * 60)
 
@@ -386,9 +397,16 @@ def browser_login(
     typer.echo("输入 quit 可退出。")
     typer.echo("-" * 60)
 
-    # 命令循环
+    # P1.1：使用非阻塞命令循环
+    # 生产环境使用 ThreadedCommandSource（daemon 输入线程 + queue.Queue）
+    # 测试可通过 _run_command_loop 的 command_source 参数注入 FakeCommandSource
+    command_source: CommandSource = ThreadedCommandSource(
+        prompt="请输入命令 (confirm/quit/status): "
+    )
+    command_source.start()
+
     try:
-        _run_command_loop(manager, session)
+        _run_command_loop(manager, session, command_source=command_source)
     except KeyboardInterrupt:
         typer.echo("\n[INFO] 收到 Ctrl+C，正在安全退出...")
         manager.close(stop_reason=StopReason.USER_ABORTED)
@@ -396,6 +414,8 @@ def browser_login(
         typer.echo(f"[ERROR] 会话异常: {type(e).__name__}", err=True)
         manager.close(stop_reason=StopReason.UNKNOWN_ERROR, error_message=str(type(e).__name__))
     finally:
+        # 停止命令源（不强制终止线程，线程为 daemon 会自动结束）
+        command_source.stop()
         # 确保资源已释放
         if manager.is_running:
             manager.close(stop_reason=StopReason.USER_ABORTED)
@@ -406,6 +426,7 @@ def browser_login(
             typer.echo(f"用户确认: {final.user_confirmed}")
             typer.echo(f"用户关闭: {final.browser_closed_by_user}")
             typer.echo(f"停止原因: {final.stop_reason}")
+            typer.echo(f"关闭来源: {final.close_source}")
             if final.error_message:
                 typer.echo(f"异常:     {final.error_message}")
             typer.echo(
@@ -414,27 +435,53 @@ def browser_login(
             )
 
 
-def _run_command_loop(manager: BrowserManager, session) -> None:
-    """处理用户命令循环。
+def _run_command_loop(
+    manager: BrowserManager,
+    session,
+    *,
+    command_source: CommandSource | None = None,
+    poll_interval: float = 0.2,
+) -> None:
+    """非阻塞命令循环（P1.1 重构）。
 
-    仅接受 confirm / quit / status，其他命令给出提示不退出。
-    空输入不视为确认。
+    主线程每隔 poll_interval 秒检查：
+    1. manager.is_running（浏览器/context 是否还在）
+    2. session 是否终态
+    3. 命令队列是否有数据
+
+    浏览器或唯一页面被关闭后，主线程立即结束循环，无需用户再次按回车。
+
+    Args:
+        manager: BrowserManager 实例
+        session: BrowserSession 实例
+        command_source: 命令源（生产为 ThreadedCommandSource，测试为 FakeCommandSource）
+        poll_interval: 轮询间隔秒数
     """
+    if command_source is None:
+        # 兜底：未注入则使用 fake（生产路径在 browser_login 中已显式传入）
+        command_source = FakeCommandSource()
+
     while True:
-        # 检测浏览器是否已被用户关闭
+        # 1. 检测浏览器是否已被关闭（无需用户输入即可退出）
         if not manager.is_running:
             typer.echo("[INFO] 浏览器已关闭（由用户或异常触发），会话结束。")
             return
 
-        try:
-            cmd = typer.prompt("请输入命令 (confirm/quit/status)", default="", show_default=False)
-        except (EOFError, KeyboardInterrupt):
-            raise
+        # 2. 检测 session 是否终态
+        if session.state.is_terminal():
+            typer.echo("[INFO] 会话已结束。")
+            return
 
-        cmd = (cmd or "").strip().lower()
+        # 3. 轮询命令（阻塞 poll_interval 秒，无命令则继续循环）
+        cmd = command_source.poll(timeout=poll_interval)
+        if cmd is None:
+            # 无命令，继续轮询检测浏览器状态
+            continue
+
+        cmd = cmd.strip().lower()
 
         if not cmd:
-            # 空输入不确认
+            # 空输入不视为确认
             typer.echo("[提示] 空输入无效。请输入 confirm / quit / status。")
             continue
 
@@ -457,6 +504,7 @@ def _run_command_loop(manager: BrowserManager, session) -> None:
                 typer.echo(f"  state:               {s.state}")
                 typer.echo(f"  user_confirmed:      {s.user_confirmed}")
                 typer.echo(f"  browser_closed_by_user: {s.browser_closed_by_user}")
+                typer.echo(f"  close_source:        {s.close_source}")
                 typer.echo(f"  started_at:          {s.started_at}")
                 typer.echo(f"  ended_at:            {s.ended_at}")
                 typer.echo(f"  stop_reason:         {s.stop_reason}")
