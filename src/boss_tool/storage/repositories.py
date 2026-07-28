@@ -1,11 +1,15 @@
 """基础 Repository。
 
-P0 阶段仅提供：
-- JobRepository.upsert()
-- JobRepository.get_by_id()
-- JobRepository.get_by_url()
-- RunLogRepository.create()
-- RunLogRepository.finish()
+P0.1 阶段：
+- JobRepository.upsert() / get_by_id() / get_by_url() 完整持久化所有字段
+- 嵌套对象（AgeResult / PhysicalIntensityResult / RecruiterInfo / CollectionMeta）
+  通过扁平字段存入 jobs 表同一行
+- job_url 冲突时复用数据库已有 job_id
+- job_status 使用 excluded.job_status，不写死 'updated'
+- first_seen_at 在更新时不被覆盖
+- RunLogRepository.create() / finish()
+- CollectionMetaRepository.create()
+- GeocodeCacheRepository.upsert() / get()
 
 不实现采集工作流。
 """
@@ -17,14 +21,21 @@ import sqlite3
 from datetime import datetime
 from typing import Any
 
+from boss_tool.enums import (
+    ActivityCategory,
+)
 from boss_tool.logging_config import get_logger
+from boss_tool.models.age import AgeResult
 from boss_tool.models.collection import CollectionMeta
 from boss_tool.models.job import Job
+from boss_tool.models.physical import PhysicalIntensityResult
+from boss_tool.models.recruiter import RecruiterInfo
 from boss_tool.models.run import RunRecord
 
 logger = get_logger(__name__)
 
 
+# ==================== 通用转换函数 ====================
 def _to_iso(dt: datetime | None) -> str | None:
     if dt is None:
         return None
@@ -66,9 +77,25 @@ def _json_loads(s: str | None) -> Any:
         return None
 
 
+def _enum_to_str(v: Any) -> str | None:
+    """枚举转字符串。已为字符串时直接返回。"""
+    if v is None:
+        return None
+    if hasattr(v, "value"):
+        return v.value
+    return str(v)
+
+
 # ==================== JobRepository ====================
 class JobRepository:
-    """岗位 Repository。"""
+    """岗位 Repository。
+
+    完整持久化 Job 模型所有字段，包括嵌套对象：
+    - AgeResult → 扁平化到 jobs 表 age_* 字段
+    - PhysicalIntensityResult → 扁平化到 jobs 表 physical_* 字段
+    - RecruiterInfo → 扁平化到 jobs 表 recruiter_* / activity_* 字段
+    - CollectionMeta → 扁平化到 jobs 表采集元与缓存去重字段
+    """
 
     UPSERT_SQL = """
     INSERT INTO jobs (
@@ -79,7 +106,29 @@ class JobRepository:
         address_raw, address_std, district,
         longitude, latitude, distance_m, within_3km,
         publish_time_raw, job_active_state, likely_still_hiring,
-        first_seen_at, last_collected_at, job_status
+        first_seen_at, last_collected_at, job_status,
+        -- 年龄判定字段
+        is_exact_65_cap, age_target_category, age_match_category,
+        accepts_candidate_age, age_match_reason, age_rule_id,
+        boundary_risk, age_confidence, age_needs_review,
+        age_evidence_raw, age_min, age_max,
+        -- 劳动强度字段
+        physical_intensity_category, physical_intensity_score, physical_intensity_evidence,
+        sitting_allowed, prolonged_standing, patrol_required, walking_intensity,
+        stair_climbing_required, lifting_required, lifting_weight_text,
+        garbage_transport_required, outdoor_work, high_temperature_exposure,
+        work_area_text, shift_type, night_shift_required,
+        working_hours_text, rest_schedule_text, physical_needs_review,
+        -- 招聘者字段
+        recruiter_name, recruiter_title, activity_raw, activity_category, active_within_3d,
+        -- 缓存与去重
+        visited_jobs, last_detail_visit_at, detail_content_hash,
+        skip_reason, revisit_allowed_at, list_stage_passed, detail_visit_count,
+        -- 采集元
+        source_page, parse_ok, missing_fields, error_reason,
+        manual_reviewed, manual_review_note,
+        -- 评分与优先级
+        score, score_breakdown, priority_rank, recommended_bucket
     ) VALUES (
         :job_id, :job_url, :job_title, :company_name,
         :salary_raw, :salary_min, :salary_max, :salary_unit, :salary_months,
@@ -88,7 +137,23 @@ class JobRepository:
         :address_raw, :address_std, :district,
         :longitude, :latitude, :distance_m, :within_3km,
         :publish_time_raw, :job_active_state, :likely_still_hiring,
-        :first_seen_at, :last_collected_at, :job_status
+        :first_seen_at, :last_collected_at, :job_status,
+        :is_exact_65_cap, :age_target_category, :age_match_category,
+        :accepts_candidate_age, :age_match_reason, :age_rule_id,
+        :boundary_risk, :age_confidence, :age_needs_review,
+        :age_evidence_raw, :age_min, :age_max,
+        :physical_intensity_category, :physical_intensity_score, :physical_intensity_evidence,
+        :sitting_allowed, :prolonged_standing, :patrol_required, :walking_intensity,
+        :stair_climbing_required, :lifting_required, :lifting_weight_text,
+        :garbage_transport_required, :outdoor_work, :high_temperature_exposure,
+        :work_area_text, :shift_type, :night_shift_required,
+        :working_hours_text, :rest_schedule_text, :physical_needs_review,
+        :recruiter_name, :recruiter_title, :activity_raw, :activity_category, :active_within_3d,
+        :visited_jobs, :last_detail_visit_at, :detail_content_hash,
+        :skip_reason, :revisit_allowed_at, :list_stage_passed, :detail_visit_count,
+        :source_page, :parse_ok, :missing_fields, :error_reason,
+        :manual_reviewed, :manual_review_note,
+        :score, :score_breakdown, :priority_rank, :recommended_bucket
     )
     ON CONFLICT(job_id) DO UPDATE SET
         job_url             = excluded.job_url,
@@ -105,7 +170,7 @@ class JobRepository:
         job_desc_full       = excluded.job_desc_full,
         job_desc_summary    = excluded.job_desc_summary,
         address_raw         = excluded.address_raw,
-        address_std         = excluded.address_std,
+        address_std        = excluded.address_std,
         district            = excluded.district,
         longitude           = excluded.longitude,
         latitude            = excluded.latitude,
@@ -115,7 +180,60 @@ class JobRepository:
         job_active_state    = excluded.job_active_state,
         likely_still_hiring = excluded.likely_still_hiring,
         last_collected_at   = excluded.last_collected_at,
-        job_status          = 'updated'
+        job_status          = excluded.job_status,
+        is_exact_65_cap             = excluded.is_exact_65_cap,
+        age_target_category         = excluded.age_target_category,
+        age_match_category          = excluded.age_match_category,
+        accepts_candidate_age       = excluded.accepts_candidate_age,
+        age_match_reason            = excluded.age_match_reason,
+        age_rule_id                 = excluded.age_rule_id,
+        boundary_risk               = excluded.boundary_risk,
+        age_confidence              = excluded.age_confidence,
+        age_needs_review            = excluded.age_needs_review,
+        age_evidence_raw            = excluded.age_evidence_raw,
+        age_min                     = excluded.age_min,
+        age_max                     = excluded.age_max,
+        physical_intensity_category = excluded.physical_intensity_category,
+        physical_intensity_score    = excluded.physical_intensity_score,
+        physical_intensity_evidence = excluded.physical_intensity_evidence,
+        sitting_allowed             = excluded.sitting_allowed,
+        prolonged_standing          = excluded.prolonged_standing,
+        patrol_required             = excluded.patrol_required,
+        walking_intensity           = excluded.walking_intensity,
+        stair_climbing_required     = excluded.stair_climbing_required,
+        lifting_required            = excluded.lifting_required,
+        lifting_weight_text         = excluded.lifting_weight_text,
+        garbage_transport_required  = excluded.garbage_transport_required,
+        outdoor_work                = excluded.outdoor_work,
+        high_temperature_exposure   = excluded.high_temperature_exposure,
+        work_area_text              = excluded.work_area_text,
+        shift_type                  = excluded.shift_type,
+        night_shift_required        = excluded.night_shift_required,
+        working_hours_text          = excluded.working_hours_text,
+        rest_schedule_text          = excluded.rest_schedule_text,
+        physical_needs_review       = excluded.physical_needs_review,
+        recruiter_name              = excluded.recruiter_name,
+        recruiter_title             = excluded.recruiter_title,
+        activity_raw                = excluded.activity_raw,
+        activity_category           = excluded.activity_category,
+        active_within_3d            = excluded.active_within_3d,
+        visited_jobs                = excluded.visited_jobs,
+        last_detail_visit_at        = excluded.last_detail_visit_at,
+        detail_content_hash         = excluded.detail_content_hash,
+        skip_reason                 = excluded.skip_reason,
+        revisit_allowed_at          = excluded.revisit_allowed_at,
+        list_stage_passed           = excluded.list_stage_passed,
+        detail_visit_count          = excluded.detail_visit_count,
+        source_page                 = excluded.source_page,
+        parse_ok                    = excluded.parse_ok,
+        missing_fields              = excluded.missing_fields,
+        error_reason                = excluded.error_reason,
+        manual_reviewed             = excluded.manual_reviewed,
+        manual_review_note          = excluded.manual_review_note,
+        score                       = excluded.score,
+        score_breakdown             = excluded.score_breakdown,
+        priority_rank               = excluded.priority_rank,
+        recommended_bucket          = excluded.recommended_bucket
     ;
     """
 
@@ -126,12 +244,56 @@ class JobRepository:
         self.conn = conn
 
     def upsert(self, job: Job) -> Job:
-        """插入或更新岗位。
+        """插入或更新岗位（完整持久化所有字段）。
 
-        job_id 冲突时更新所有非主键字段，并将 job_status 标为 'updated'。
-        job_url 唯一约束由索引 uq_jobs_url 保证。
+        URL 冲突策略：
+        - upsert 前先按 job_url 查询
+        - 如果 URL 已存在且 job_id 不同，使用数据库已有 job_id 作为同一岗位
+        - 不创建重复岗位
+        - 在代码注释和测试中说明
+
+        job_status 策略：
+        - ON CONFLICT 时使用 excluded.job_status（不写死 'updated'）
+        - 由调用方决定 job_status 值
+
+        first_seen_at 策略：
+        - ON CONFLICT 时 NOT excluded.first_seen_at，保留原值
+        - SQL 未在 UPDATE SET 中包含 first_seen_at，因此不会被覆盖
+
+        不自动 commit；调用方通过 Database.transaction() 或显式 conn.commit() 提交。
         """
-        params = {
+        # URL 冲突处理：如果 URL 已存在但 job_id 不同，复用数据库已有 job_id
+        job_id_to_use = job.job_id
+        existing = self.get_by_url(job.job_url)
+        if existing is not None and existing.job_id != job.job_id:
+            logger.info(
+                "URL 冲突：job_url=%s 已存在 job_id=%s，将复用而非创建 job_id=%s",
+                job.job_url,
+                existing.job_id,
+                job.job_id,
+            )
+            job_id_to_use = existing.job_id
+            # 用复用的 job_id 替换原 job_id 后再 upsert
+            job = job.model_copy(update={"job_id": job_id_to_use})
+
+        params = self._job_to_params(job)
+        self.conn.execute(self.UPSERT_SQL, params)
+        logger.debug("upsert job: %s", job.job_id)
+        return job
+
+    def get_by_id(self, job_id: str) -> Job | None:
+        row = self.conn.execute(self.SELECT_BY_ID_SQL, (job_id,)).fetchone()
+        return self._row_to_job(row) if row else None
+
+    def get_by_url(self, job_url: str) -> Job | None:
+        row = self.conn.execute(self.SELECT_BY_URL_SQL, (job_url,)).fetchone()
+        return self._row_to_job(row) if row else None
+
+    # ==================== 私有：参数构造 ====================
+    def _job_to_params(self, job: Job) -> dict[str, Any]:
+        """将 Job 模型转为 SQL 参数字典（含嵌套对象扁平化）。"""
+        # 基础字段
+        params: dict[str, Any] = {
             "job_id": job.job_id,
             "job_url": job.job_url,
             "job_title": job.job_title,
@@ -139,7 +301,7 @@ class JobRepository:
             "salary_raw": job.salary_raw,
             "salary_min": job.salary_min,
             "salary_max": job.salary_max,
-            "salary_unit": job.salary_unit,
+            "salary_unit": _enum_to_str(job.salary_unit),
             "salary_months": job.salary_months,
             "experience": job.experience,
             "degree": job.degree,
@@ -154,28 +316,198 @@ class JobRepository:
             "distance_m": job.distance_m,
             "within_3km": _bool_to_int(job.within_3km),
             "publish_time_raw": job.publish_time_raw,
-            "job_active_state": job.job_active_state,
-            "likely_still_hiring": job.likely_still_hiring,
+            "job_active_state": _enum_to_str(job.job_active_state),
+            "likely_still_hiring": _enum_to_str(job.likely_still_hiring),
             "first_seen_at": _to_iso(job.first_seen_at),
             "last_collected_at": _to_iso(job.last_collected_at),
-            "job_status": job.job_status,
+            "job_status": _enum_to_str(job.job_status),
         }
-        self.conn.execute(self.UPSERT_SQL, params)
-        # 不在此处自动 commit；调用方负责通过 Database.transaction() 或显式 conn.commit() 提交
-        # 这样在 transaction context 内可以正确回滚
-        logger.debug("upsert job: %s", job.job_id)
-        return job
 
-    def get_by_id(self, job_id: str) -> Job | None:
-        row = self.conn.execute(self.SELECT_BY_ID_SQL, (job_id,)).fetchone()
-        return self._row_to_job(row) if row else None
+        # 年龄判定字段
+        age = job.age_result
+        if age is not None:
+            params.update(
+                {
+                    "is_exact_65_cap": _bool_to_int(age.is_exact_65_cap),
+                    "age_target_category": _enum_to_str(age.age_target_category),
+                    "age_match_category": _enum_to_str(age.age_match_category),
+                    "accepts_candidate_age": _bool_to_int(age.accepts_candidate_age),
+                    "age_match_reason": age.age_match_reason,
+                    "age_rule_id": age.age_rule_id,
+                    "boundary_risk": _enum_to_str(age.boundary_risk),
+                    "age_confidence": _enum_to_str(age.age_confidence),
+                    "age_needs_review": _bool_to_int(age.age_needs_review),
+                    "age_evidence_raw": age.age_evidence_raw,
+                    "age_min": age.age_min,
+                    "age_max": age.age_max,
+                }
+            )
+        else:
+            params.update(
+                {
+                    "is_exact_65_cap": 0,
+                    "age_target_category": None,
+                    "age_match_category": None,
+                    "accepts_candidate_age": None,
+                    "age_match_reason": None,
+                    "age_rule_id": None,
+                    "boundary_risk": None,
+                    "age_confidence": None,
+                    "age_needs_review": 0,
+                    "age_evidence_raw": None,
+                    "age_min": None,
+                    "age_max": None,
+                }
+            )
 
-    def get_by_url(self, job_url: str) -> Job | None:
-        row = self.conn.execute(self.SELECT_BY_URL_SQL, (job_url,)).fetchone()
-        return self._row_to_job(row) if row else None
+        # 劳动强度字段
+        phy = job.physical_intensity
+        if phy is not None:
+            params.update(
+                {
+                    "physical_intensity_category": _enum_to_str(phy.physical_intensity_category),
+                    "physical_intensity_score": phy.physical_intensity_score,
+                    "physical_intensity_evidence": phy.physical_intensity_evidence,
+                    "sitting_allowed": _bool_to_int(phy.sitting_allowed),
+                    "prolonged_standing": _bool_to_int(phy.prolonged_standing),
+                    "patrol_required": _bool_to_int(phy.patrol_required),
+                    "walking_intensity": _enum_to_str(phy.walking_intensity),
+                    "stair_climbing_required": _bool_to_int(phy.stair_climbing_required),
+                    "lifting_required": _bool_to_int(phy.lifting_required),
+                    "lifting_weight_text": phy.lifting_weight_text,
+                    "garbage_transport_required": _bool_to_int(phy.garbage_transport_required),
+                    "outdoor_work": _bool_to_int(phy.outdoor_work),
+                    "high_temperature_exposure": _bool_to_int(phy.high_temperature_exposure),
+                    "work_area_text": phy.work_area_text,
+                    "shift_type": _enum_to_str(phy.shift_type),
+                    "night_shift_required": _bool_to_int(phy.night_shift_required),
+                    "working_hours_text": phy.working_hours_text,
+                    "rest_schedule_text": phy.rest_schedule_text,
+                    "physical_needs_review": _bool_to_int(phy.physical_needs_review),
+                }
+            )
+        else:
+            params.update(
+                {
+                    "physical_intensity_category": None,
+                    "physical_intensity_score": None,
+                    "physical_intensity_evidence": None,
+                    "sitting_allowed": None,
+                    "prolonged_standing": None,
+                    "patrol_required": None,
+                    "walking_intensity": None,
+                    "stair_climbing_required": None,
+                    "lifting_required": None,
+                    "lifting_weight_text": None,
+                    "garbage_transport_required": None,
+                    "outdoor_work": None,
+                    "high_temperature_exposure": None,
+                    "work_area_text": None,
+                    "shift_type": None,
+                    "night_shift_required": None,
+                    "working_hours_text": None,
+                    "rest_schedule_text": None,
+                    "physical_needs_review": 0,
+                }
+            )
 
+        # 招聘者字段
+        rec = job.recruiter
+        if rec is not None:
+            params.update(
+                {
+                    "recruiter_name": rec.recruiter_name,
+                    "recruiter_title": rec.recruiter_title,
+                    "activity_raw": rec.activity_raw,
+                    "activity_category": _enum_to_str(rec.activity_category),
+                    "active_within_3d": _bool_to_int(rec.active_within_3d),
+                }
+            )
+        else:
+            params.update(
+                {
+                    "recruiter_name": None,
+                    "recruiter_title": None,
+                    "activity_raw": None,
+                    "activity_category": None,
+                    "active_within_3d": None,
+                }
+            )
+
+        # 采集元与缓存去重字段
+        meta = job.collection_meta
+        if meta is not None:
+            params.update(
+                {
+                    "source_page": meta.source_page,
+                    "parse_ok": _bool_to_int(meta.parse_ok),
+                    "missing_fields": _json_dumps(meta.missing_fields),
+                    "error_reason": meta.error_reason,
+                    "manual_reviewed": _bool_to_int(meta.manual_reviewed),
+                    "manual_review_note": meta.manual_review_note,
+                    "visited_jobs": _bool_to_int(meta.visited_jobs),
+                    "last_detail_visit_at": _to_iso(meta.last_detail_visit_at),
+                    "detail_content_hash": meta.detail_content_hash,
+                    "skip_reason": _enum_to_str(meta.skip_reason),
+                    "revisit_allowed_at": _to_iso(meta.revisit_allowed_at),
+                    "list_stage_passed": _bool_to_int(meta.list_stage_passed),
+                    "detail_visit_count": meta.detail_visit_count,
+                }
+            )
+        else:
+            params.update(
+                {
+                    "source_page": None,
+                    "parse_ok": 1,
+                    "missing_fields": None,
+                    "error_reason": None,
+                    "manual_reviewed": 0,
+                    "manual_review_note": None,
+                    "visited_jobs": 0,
+                    "last_detail_visit_at": None,
+                    "detail_content_hash": None,
+                    "skip_reason": None,
+                    "revisit_allowed_at": None,
+                    "list_stage_passed": 0,
+                    "detail_visit_count": 0,
+                }
+            )
+
+        # 评分与优先级
+        params.update(
+            {
+                "score": job.score,
+                "score_breakdown": _json_dumps(job.score_breakdown),
+                "priority_rank": job.priority_rank,
+                "recommended_bucket": job.recommended_bucket,
+            }
+        )
+
+        return params
+
+    # ==================== 私有：行转对象 ====================
     def _row_to_job(self, row: sqlite3.Row) -> Job:
+        """从数据库行恢复 Job 模型（含嵌套对象）。
+
+        嵌套对象恢复规则：
+        - 如果该嵌套对象所有关键字段均为空，则恢复为 None
+        - 如果存在任一业务字段，则构造对应 Pydantic 模型
+        - 不创建内容全部为空但看起来像有效结果的伪对象
+        """
+        # 恢复 AgeResult
+        age_result = self._restore_age_result(row)
+
+        # 恢复 PhysicalIntensityResult
+        physical_intensity = self._restore_physical_intensity(row)
+
+        # 恢复 RecruiterInfo
+        recruiter = self._restore_recruiter(row)
+
+        # 恢复 CollectionMeta
+        collection_meta = self._restore_collection_meta(row)
+
         return Job(
+            # 基础字段
             job_id=row["job_id"],
             job_url=row["job_url"],
             job_title=row["job_title"],
@@ -203,6 +535,116 @@ class JobRepository:
             first_seen_at=_from_iso(row["first_seen_at"]),  # type: ignore[arg-type]
             last_collected_at=_from_iso(row["last_collected_at"]),  # type: ignore[arg-type]
             job_status=row["job_status"],
+            # 嵌套对象
+            age_result=age_result,
+            physical_intensity=physical_intensity,
+            recruiter=recruiter,
+            collection_meta=collection_meta,
+            # 评分与优先级
+            score=row["score"],
+            score_breakdown=_json_loads(row["score_breakdown"]),
+            priority_rank=row["priority_rank"],
+            recommended_bucket=row["recommended_bucket"],
+        )
+
+    def _restore_age_result(self, row: sqlite3.Row) -> AgeResult | None:
+        """从数据库行恢复 AgeResult。
+
+        如果 age_target_category 为空，认为未判定，返回 None。
+        age_target_category 是必填字段，若它为空则 AgeResult 无法构造。
+        """
+        if row["age_target_category"] is None:
+            return None
+        return AgeResult(
+            candidate_age=60,  # 固定写入 config 的求职者年龄
+            age_evidence_raw=row["age_evidence_raw"],
+            age_min=row["age_min"],
+            age_max=row["age_max"],
+            is_exact_65_cap=bool(row["is_exact_65_cap"]),
+            age_target_category=row["age_target_category"],
+            age_match_category=row["age_match_category"],
+            accepts_candidate_age=_int_to_bool(row["accepts_candidate_age"]),
+            age_match_reason=row["age_match_reason"],
+            age_rule_id=row["age_rule_id"],
+            boundary_risk=row["boundary_risk"],
+            age_confidence=row["age_confidence"],
+            age_needs_review=bool(row["age_needs_review"]),
+        )
+
+    def _restore_physical_intensity(self, row: sqlite3.Row) -> PhysicalIntensityResult | None:
+        """从数据库行恢复 PhysicalIntensityResult。
+
+        如果 physical_intensity_category 为空，认为未判定，返回 None。
+        physical_intensity_category 是必填字段，若它为空则模型无法构造。
+        """
+        if row["physical_intensity_category"] is None:
+            return None
+        return PhysicalIntensityResult(
+            physical_intensity_category=row["physical_intensity_category"],
+            physical_intensity_score=row["physical_intensity_score"],
+            physical_intensity_evidence=row["physical_intensity_evidence"],
+            sitting_allowed=_int_to_bool(row["sitting_allowed"]),
+            prolonged_standing=_int_to_bool(row["prolonged_standing"]),
+            patrol_required=_int_to_bool(row["patrol_required"]),
+            walking_intensity=row["walking_intensity"],
+            stair_climbing_required=_int_to_bool(row["stair_climbing_required"]),
+            lifting_required=_int_to_bool(row["lifting_required"]),
+            lifting_weight_text=row["lifting_weight_text"],
+            garbage_transport_required=_int_to_bool(row["garbage_transport_required"]),
+            outdoor_work=_int_to_bool(row["outdoor_work"]),
+            high_temperature_exposure=_int_to_bool(row["high_temperature_exposure"]),
+            work_area_text=row["work_area_text"],
+            shift_type=row["shift_type"],
+            night_shift_required=_int_to_bool(row["night_shift_required"]),
+            working_hours_text=row["working_hours_text"],
+            rest_schedule_text=row["rest_schedule_text"],
+            physical_needs_review=bool(row["physical_needs_review"]),
+        )
+
+    def _restore_recruiter(self, row: sqlite3.Row) -> RecruiterInfo | None:
+        """从数据库行恢复 RecruiterInfo。
+
+        如果所有 recruiter_* 与 activity_* 字段均为空，返回 None。
+        activity_category 有默认值 'unknown'，因此只要任一字段有值就构造对象。
+        """
+        if (
+            row["recruiter_name"] is None
+            and row["recruiter_title"] is None
+            and row["activity_raw"] is None
+            and row["active_within_3d"] is None
+        ):
+            return None
+        return RecruiterInfo(
+            recruiter_name=row["recruiter_name"],
+            recruiter_title=row["recruiter_title"],
+            activity_raw=row["activity_raw"],
+            activity_category=row["activity_category"] or ActivityCategory.UNKNOWN.value,
+            active_within_3d=_int_to_bool(row["active_within_3d"]),
+        )
+
+    def _restore_collection_meta(self, row: sqlite3.Row) -> CollectionMeta | None:
+        """从数据库行恢复 CollectionMeta。
+
+        如果 source_page 为空，认为未采集，返回 None。
+        source_page 是必填字段，若它为空则 CollectionMeta 无法构造。
+        """
+        if row["source_page"] is None:
+            return None
+        return CollectionMeta(
+            source_page=row["source_page"],
+            collected_at=_from_iso(row["last_collected_at"]),  # type: ignore[arg-type]
+            parse_ok=bool(row["parse_ok"]),
+            missing_fields=_json_loads(row["missing_fields"]) or [],
+            error_reason=row["error_reason"],
+            manual_reviewed=bool(row["manual_reviewed"]),
+            manual_review_note=row["manual_review_note"],
+            visited_jobs=bool(row["visited_jobs"]),
+            last_detail_visit_at=_from_iso(row["last_detail_visit_at"]),
+            detail_content_hash=row["detail_content_hash"],
+            skip_reason=row["skip_reason"],
+            revisit_allowed_at=_from_iso(row["revisit_allowed_at"]),
+            list_stage_passed=bool(row["list_stage_passed"]),
+            detail_visit_count=row["detail_visit_count"],
         )
 
 
@@ -244,7 +686,7 @@ class CollectionMetaRepository:
             "visited_jobs": _bool_to_int(meta.visited_jobs),
             "last_detail_visit_at": _to_iso(meta.last_detail_visit_at),
             "detail_content_hash": meta.detail_content_hash,
-            "skip_reason": meta.skip_reason,
+            "skip_reason": _enum_to_str(meta.skip_reason),
             "revisit_allowed_at": _to_iso(meta.revisit_allowed_at),
             "list_stage_passed": _bool_to_int(meta.list_stage_passed),
             "detail_visit_count": meta.detail_visit_count,
@@ -310,7 +752,7 @@ class RunLogRepository:
         params = {
             "run_id": record.run_id,
             "started_at": _to_iso(record.started_at),
-            "status": record.status,
+            "status": _enum_to_str(record.status),
             "account_warning_detected": _bool_to_int(record.account_warning_detected),
             "page_count": record.page_count,
             "detail_page_count": record.detail_page_count,
@@ -327,12 +769,17 @@ class RunLogRepository:
         logger.info("run_log created: run_id=%s", record.run_id)
 
     def finish(self, record: RunRecord) -> None:
-        """更新一条运行记录为结束状态。"""
+        """更新一条运行记录为结束状态。
+
+        run_completed 仅在 status 为 completed 时为 True。
+        """
+        # status 在 use_enum_values=True 时已是字符串
+        status_str = record.status.value if hasattr(record.status, "value") else record.status
         params = {
             "run_id": record.run_id,
             "ended_at": _to_iso(record.ended_at),
-            "status": record.status,
-            "stop_reason": record.stop_reason,
+            "status": _enum_to_str(record.status),
+            "stop_reason": _enum_to_str(record.stop_reason),
             "account_warning_detected": _bool_to_int(record.account_warning_detected),
             "warning_type": record.warning_type,
             "warning_text": record.warning_text,
@@ -347,7 +794,7 @@ class RunLogRepository:
             "stopped_by_safety_rule": _bool_to_int(record.stopped_by_safety_rule),
             "user_aborted": _bool_to_int(record.user_aborted),
             "last_successful_url": record.last_successful_url,
-            "run_completed": _bool_to_int(record.status == "completed"),
+            "run_completed": _bool_to_int(status_str == "completed"),
         }
         self.conn.execute(self.FINISH_SQL, params)
         logger.info(

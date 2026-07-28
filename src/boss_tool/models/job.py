@@ -1,6 +1,7 @@
 """Job 模型：岗位主表 1 行 = 1 岗位当前态。
 
 按设计稿 v0.3 第 5.1 节字段字典定义。
+P0.1：补充嵌套对象与评分字段，与数据库表完整对齐。
 """
 
 from __future__ import annotations
@@ -15,6 +16,10 @@ from boss_tool.enums import (
     JobStatus,
     SalaryUnit,
 )
+from boss_tool.models.age import AgeResult
+from boss_tool.models.collection import CollectionMeta
+from boss_tool.models.physical import PhysicalIntensityResult
+from boss_tool.models.recruiter import RecruiterInfo
 
 
 class Job(BaseModel):
@@ -65,6 +70,28 @@ class Job(BaseModel):
     first_seen_at: datetime = Field(..., description="首次发现时间")
     last_collected_at: datetime = Field(..., description="最近采集时间")
     job_status: JobStatus = Field(default=JobStatus.UNKNOWN)
+
+    # ===== 嵌套：年龄判定结果 =====
+    age_result: AgeResult | None = Field(default=None, description="年龄判定结果")
+
+    # ===== 嵌套：劳动强度判定结果 =====
+    physical_intensity: PhysicalIntensityResult | None = Field(
+        default=None, description="劳动强度判定结果"
+    )
+
+    # ===== 嵌套：招聘者信息 =====
+    recruiter: RecruiterInfo | None = Field(default=None, description="招聘者公开信息")
+
+    # ===== 嵌套：采集元信息 =====
+    collection_meta: CollectionMeta | None = Field(default=None, description="采集元信息")
+
+    # ===== 评分与优先级 =====
+    score: float | None = Field(default=None, description="综合评分")
+    score_breakdown: dict[str, float] | None = Field(
+        default=None, description="评分明细（各维度得分）"
+    )
+    priority_rank: int | None = Field(default=None, ge=0, description="优先级排名")
+    recommended_bucket: str | None = Field(default=None, description="推荐桶名")
 
     @field_validator("job_url")
     @classmethod
