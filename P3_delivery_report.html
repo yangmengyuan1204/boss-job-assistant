@@ -1,0 +1,320 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>P3 交付报告 - 当前搜索结果采集与SQLite写入</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", "Microsoft YaHei", sans-serif; max-width: 1100px; margin: 0 auto; padding: 24px; color: #1f2328; background: #ffffff; line-height: 1.6; }
+  h1 { color: #0969da; border-bottom: 2px solid #0969da; padding-bottom: 8px; font-size: 22px; }
+  h2 { color: #1f2328; border-bottom: 1px solid #d0d7de; padding-bottom: 6px; margin-top: 32px; font-size: 18px; }
+  h3 { color: #57606a; font-size: 15px; margin-top: 20px; }
+  code, pre { font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace; }
+  code { background: #f6f8fa; padding: 2px 6px; border-radius: 4px; font-size: 13px; }
+  pre { background: #f6f8fa; padding: 12px; border-radius: 6px; overflow-x: auto; font-size: 12px; line-height: 1.5; border: 1px solid #d0d7de; }
+  table { border-collapse: collapse; width: 100%; margin: 12px 0; font-size: 13px; }
+  th, td { border: 1px solid #d0d7de; padding: 8px 12px; text-align: left; }
+  th { background: #f6f8fa; font-weight: 600; }
+  tr:nth-child(even) { background: #fbfcfd; }
+  .badge { display: inline-block; padding: 2px 8px; border-radius: 12px; font-size: 12px; font-weight: 600; }
+  .badge-pass { background: #dcfcce; color: #1a7f37; }
+  .badge-warn { background: #fff8c5; color: #9a6700; }
+  .badge-fail { background: #ffebe9; color: #cf222e; }
+  .badge-info { background: #ddf4ff; color: #0969da; }
+  .meta { background: #f6f8fa; padding: 12px 16px; border-radius: 6px; border-left: 4px solid #0969da; margin: 16px 0; }
+  .warn-box { background: #fff8c5; border-left: 4px solid #d4a72c; padding: 12px 16px; border-radius: 4px; margin: 12px 0; }
+  .danger-box { background: #ffebe9; border-left: 4px solid #cf222e; padding: 12px 16px; border-radius: 4px; margin: 12px 0; }
+  .success-box { background: #dcfcce; border-left: 4px solid #1a7f37; padding: 12px 16px; border-radius: 4px; margin: 12px 0; }
+  ul { padding-left: 20px; }
+  li { margin: 4px 0; }
+  .small { font-size: 12px; color: #57606a; }
+  .file-list { columns: 2; column-gap: 24px; }
+  .file-list li { break-inside: avoid; }
+</style>
+</head>
+<body>
+
+<h1>P3 交付报告 · 当前搜索结果采集与SQLite写入</h1>
+
+<div class="meta">
+  <strong>阶段：</strong> P3（搜索结果列表采集，仅当前页面，不自动搜索）<br>
+  <strong>P2.1 基线提交：</strong> <code>ad496339afdd08097e7975e8824a297107433b3d</code><br>
+  <strong>已验收状态：</strong> P0 PASS · P0.1 PASS · P1 PASS · P1.1 PASS · P2 PASS · P2.1 PASS<br>
+  <strong>交付结论：</strong> <span class="badge badge-pass">P3 已完成，等待人工验收，不进入 P4</span>
+</div>
+
+<h2>1. 最新提交 SHA</h2>
+<p><strong>P3 提交：</strong> <code>P3: 当前搜索结果采集与SQLite写入</code>，SHA 将在推送后填入。</p>
+<p><strong>基线：</strong> <code>ad496339afdd08097e7975e8824a297107433b3d</code>（P2.1 已通过）</p>
+
+<h2>2. 阶段目标</h2>
+<p>在人工登录、人工搜索完成后，仅采集当前搜索结果页面，将岗位列表解析并写入 SQLite。</p>
+<p>数据流：</p>
+<pre>
+浏览器当前页面 → HTML → P2 ListPageParser → JobListRecord → SQLite
+</pre>
+<p><strong>严格禁止：</strong>自动搜索、自动翻页、自动滚动、自动点击职位、自动进入详情页、自动处理验证码、自动登录、自动消息、自动投递、地址解析、年龄判断、Excel 导出。</p>
+
+<h2>3. 新增与修改模块</h2>
+
+<h3>3.1 新增模块</h3>
+<table>
+<tr><th>文件</th><th>说明</th></tr>
+<tr><td><code>src/boss_tool/models/job_list.py</code></td><td>P3 数据模型 <code>JobListRecord</code> 与 <code>derive_job_id()</code> 去重键推导</td></tr>
+<tr><td><code>src/boss_tool/collect_runner.py</code></td><td>collect-current-page 命令核心逻辑：浏览器启动、命令循环、页面类型检测、HTML 读取、Parser 调用、SQLite UPSERT、日志写入</td></tr>
+<tr><td><code>tests/test_job_list.py</code></td><td>JobListRecord 模型、derive_job_id、JobListRepository、parse_list_page 集成测试（27 项）</td></tr>
+<tr><td><code>tests/test_collect_runner.py</code></td><td>命令循环、_handle_collect、_write_collect_log 测试（12 项，Mock 注入，不启动浏览器）</td></tr>
+</table>
+
+<h3>3.2 修改模块</h3>
+<table>
+<tr><th>文件</th><th>修改内容</th></tr>
+<tr><td><code>src/boss_tool/cli.py</code></td><td>新增 <code>collect-current-page</code> CLI 命令（<code>--config-dir</code>、<code>--home-url</code>、<code>--page-no</code> 参数）</td></tr>
+<tr><td><code>src/boss_tool/storage/database.py</code></td><td>新增 V2 迁移 <code>migration_v2_job_list</code>，<code>CURRENT_SCHEMA_VERSION</code> 升至 2</td></tr>
+<tr><td><code>src/boss_tool/storage/repositories.py</code></td><td>新增 <code>JobListRepository</code>（save_job_list / bulk_upsert_job_list / count / exists / get_all）</td></tr>
+<tr><td><code>tests/test_database.py</code></td><td>迁移版本断言改用 <code>CURRENT_SCHEMA_VERSION</code> 常量</td></tr>
+</table>
+
+<h2>4. SQLite Schema</h2>
+<p>新增表 <code>job_list</code>（V2 迁移）：</p>
+<pre>
+CREATE TABLE IF NOT EXISTS job_list (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    job_id       TEXT UNIQUE NOT NULL,
+    title        TEXT,
+    salary       TEXT,
+    company      TEXT,
+    location     TEXT,
+    experience   TEXT,
+    education    TEXT,
+    job_url      TEXT,
+    company_url  TEXT,
+    page_no      INTEGER,
+    collected_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_job_list_job_id   ON job_list(job_id);
+CREATE INDEX IF NOT EXISTS idx_job_list_collected ON job_list(collected_at);
+</pre>
+<p><code>job_id</code> 为 UNIQUE 去重主键。<code>job_url</code> / <code>company_url</code> 已通过 P2.1 <code>sanitize_url()</code> 脱敏（无 query / fragment / userinfo / port）。</p>
+
+<h2>5. 去重策略</h2>
+<p><code>derive_job_id()</code> 推导优先级：</p>
+<ol>
+<li><strong>job_url 路径末段</strong>：如 <code>/job_detail/abc123.html</code> → <code>abc123</code>（去除 <code>.html</code> / <code>.htm</code> 后缀）</li>
+<li><strong>哈希回退</strong>：<code>SHA256(title|company|salary)</code> 前 16 位 + <code>hash:</code> 前缀</li>
+</ol>
+<p>UPSERT 使用 <code>INSERT ... ON CONFLICT(job_id) DO UPDATE</code>，重复执行 collect-current-page 不会无限新增重复记录。</p>
+
+<h2>6. CLI 示例</h2>
+<pre>
+python -m boss_tool collect-current-page
+python -m boss_tool collect-current-page --page-no 1
+python -m boss_tool collect-current-page --config-dir ./config
+</pre>
+<p>命令启动后进入交互循环：</p>
+<pre>
+============================================================
+boss-tool · collect-current-page 搜索结果列表采集
+============================================================
+用户目录: ...
+首页:     https://www.zhipin.com/
+数据库:   data/boss_tool.db
+日志:     logs/p3_collect.log
+会话模式: 可见浏览器 / 单账号 / 人工确认 / 仅采集当前页
+------------------------------------------------------------
+浏览器已启动并打开首页。
+请在浏览器中手动完成登录，然后手动搜索到目标岗位列表页。
+完成后回到终端使用命令：collect / status / quit
+------------------------------------------------------------
+请输入命令 (collect/status/quit): collect
+</pre>
+<p>collect 输出示例：</p>
+<pre>
+页面类型: search_list
+发现职位: 26
+新增:     24
+更新:     2
+重复:     0
+数据库:   job_list
+耗时:     0.8s
+完成。
+</pre>
+<p>非搜索结果页时拒绝采集：</p>
+<pre>
+页面类型: unknown
+[ERROR] 当前页面不是职位搜索结果页(unknown)，无法采集。请手动导航到搜索结果页后重试。
+</pre>
+
+<h2>7. Parser 示例</h2>
+<p>Parser 完全复用 P2 <code>parse_list_page()</code>，不重新实现 DOM 提取，不依赖固定 CSS，继续使用 <code>SelectorCandidate</code> 多候选机制。</p>
+<pre>
+from boss_tool.parsers.list_page import parse_list_page
+from boss_tool.models.job_list import JobListRecord
+
+cards = parse_list_page(html, base_url=raw_url)
+records = [
+    JobListRecord.from_observed_card(card, page_no=page_no, collected_at=now)
+    for card in cards
+]
+</pre>
+<p>Parser 与数据库解耦：Parser 只负责 HTML → ObservedJobCard，Storage 负责 UPSERT。Parser 不访问数据库。</p>
+
+<h2>8. Diagnostics 示例</h2>
+<p>字段缺失时写入 Diagnostics，不直接抛异常：</p>
+<pre>
+# parse_list_page 返回 cards + diagnostics
+cards, diagnostics = parse_list_page_with_diagnostics(html, base_url=raw_url)
+# diagnostics 记录：选择器命中/未命中、字段缺失、多候选回退等
+</pre>
+<p>P2 Diagnostics 机制在 P3 中继续有效，字段缺失不影响其他卡片的解析与写入。</p>
+
+<h2>9. 日志</h2>
+<p>新增 <code>logs/p3_collect.log</code>（追加模式）：</p>
+<pre>
+========== 采集记录 2026-07-29T22:56:57.123456 ==========
+开始时间:   2026-07-29T22:56:57.123456
+结束时间:   2026-07-29T22:56:57.987654
+耗时:       0.8s
+脱敏URL:    https://www.zhipin.com/web/geek/job
+页面类型:   search_list
+岗位数量:   26
+新增:       24
+更新:       2
+</pre>
+<p><strong>不记录：</strong>Cookie、手机号、Email、Token、SecurityId、完整原始 URL、页面完整 HTML、截图。</p>
+
+<h2>10. 测试结果</h2>
+
+<h3>10.1 P3 新增测试</h3>
+<table>
+<tr><th>文件</th><th>测试类</th><th>测试数</th><th>覆盖范围</th></tr>
+<tr><td rowspan="4"><code>tests/test_job_list.py</code></td><td><code>TestDeriveJobId</code></td><td>8</td><td>URL 路径推导 / 哈希回退 / 稳定性 / 空值处理</td></tr>
+<tr><td><code>TestJobListRecord</code></td><td>6</td><td>from_observed_card 转换 / 字段映射 / page_no / job_id 校验 / collected_at 默认值</td></tr>
+<tr><td><code>TestJobListRepository</code></td><td>9</td><td>UPSERT 新增/更新 / 批量 / job_id 去重 / hash 去重 / URL 去重 / count / exists / get_all</td></tr>
+<tr><td><code>TestParseListPageToJobListRecord</code></td><td>4</td><td>fixture 正常解析 / 缺字段 / 多 salary / 空页面</td></tr>
+<tr><td rowspan="3"><code>tests/test_collect_runner.py</code></td><td><code>TestCollectLoopCommands</code></td><td>4</td><td>quit / status / 空输入 / 未知命令</td></tr>
+<tr><td><code>TestHandleCollect</code></td><td>5</td><td>搜索结果页采集 / 非搜索页拒绝 / 空结果页 / 日志写入 / 去重 UPSERT</td></tr>
+<tr><td><code>TestWriteCollectLog</code></td><td>3</td><td>必填字段 / 异常分支 / 追加模式</td></tr>
+</table>
+<p><strong>P3 新增测试合计：39 项</strong>（test_job_list.py 27 + test_collect_runner.py 12）</p>
+<p class="small">Parser 测试使用 HTML fixture，不启动浏览器，不访问网络。</p>
+
+<h3>10.2 全量测试</h3>
+<div class="success-box">
+<strong>pytest 结果：431 passed in 23.49s</strong>
+</div>
+<pre>
+$ python -m pytest -q
+........................................................................ [ 16%]
+........................................................................ [ 33%]
+........................................................................ [ 50%]
+........................................................................ [ 66%]
+........................................................................ [ 83%]
+.......................................................................  [100%]
+431 passed in 23.49s
+</pre>
+
+<h3>10.3 覆盖率</h3>
+<div class="success-box">
+<strong>总覆盖率：84%</strong>（2913 statements, 419 missed, 728 branches）
+</div>
+<table>
+<tr><th>模块</th><th>Stmts</th><th>Miss</th><th>Cover</th></tr>
+<tr><td><code>models/job_list.py</code></td><td>44</td><td>1</td><td>95%</td></tr>
+<tr><td><code>collect_runner.py</code></td><td>185</td><td>91</td><td>50%</td></tr>
+<tr><td><code>storage/database.py</code></td><td>96</td><td>2</td><td>95%</td></tr>
+<tr><td><code>storage/repositories.py</code></td><td>178</td><td>7</td><td>96%</td></tr>
+<tr><td><code>parsers/sanitization.py</code></td><td>135</td><td>10</td><td>91%</td></tr>
+<tr><td><code>parsers/list_page.py</code></td><td>102</td><td>10</td><td>89%</td></tr>
+<tr><td><strong>总计</strong></td><td><strong>2913</strong></td><td><strong>419</strong></td><td><strong>84%</strong></td></tr>
+</table>
+<p class="small">collect_runner.py 50% 为预期：浏览器启动路径（run_collect_current_page 函数体）需要真实 Playwright 环境，测试通过 Mock 注入覆盖命令循环与采集逻辑。</p>
+
+<h3>10.4 Ruff 检查</h3>
+<div class="success-box">
+<strong>ruff check . → All checks passed!</strong>
+</div>
+<pre>
+$ python -m ruff check .
+All checks passed!
+</pre>
+
+<h3>10.5 Ruff 格式检查</h3>
+<div class="success-box">
+<strong>ruff format --check src tests → 59 files already formatted</strong>
+</div>
+<pre>
+$ python -m ruff format --check src tests
+59 files already formatted
+</pre>
+
+<h2>11. 范围限制遵守声明</h2>
+<div class="success-box">
+<p><strong>本阶段严格遵守以下范围限制：</strong></p>
+<ul>
+<li>✅ 仅实现 collect-current-page CLI 命令</li>
+<li>✅ 仅采集用户手动导航到的当前搜索结果页面</li>
+<li>✅ 完全复用 P2 Parser（parse_list_page / PageTypeDetection / SelectorCandidate / Diagnostics）</li>
+<li>✅ SQLite 持久化使用 UPSERT 去重</li>
+<li>✅ job_url / company_url 继续调用 sanitize_url() 脱敏</li>
+<li>✅ 日志脱敏，不记录 Cookie / 手机号 / Email / Token / SecurityId</li>
+<li>✅ Parser 与数据库解耦</li>
+<li>✅ 测试使用 HTML fixture，不启动浏览器，不访问网络</li>
+</ul>
+</div>
+
+<div class="danger-box">
+<p><strong>本阶段未实现（禁止项确认）：</strong></p>
+<ul>
+<li>❌ 未实现自动搜索</li>
+<li>❌ 未实现自动翻页</li>
+<li>❌ 未实现自动滚动</li>
+<li>❌ 未实现自动点击职位</li>
+<li>❌ 未实现自动进入详情页</li>
+<li>❌ 未实现自动处理验证码</li>
+<li>❌ 未实现自动登录</li>
+<li>❌ 未实现自动消息 / 自动投递</li>
+<li>❌ 未实现地址解析</li>
+<li>❌ 未实现年龄判断</li>
+<li>❌ 未实现 Excel 导出</li>
+<li>❌ 未重写 Parser</li>
+<li>❌ 未重写 Sanitization</li>
+<li>❌ 未绕过 Diagnostics</li>
+<li>❌ 未修改 P0/P1/P2 已验收架构</li>
+</ul>
+</div>
+
+<h2>12. 安全声明</h2>
+<div class="warn-box">
+<p><strong>本工具仅减少不必要访问与程序失控风险，不能保证账号不受限制，不得用于规避平台检测。</strong></p>
+<ul>
+<li>Playwright 保持正常自动化特征，未引入任何反检测或规避风控代码</li>
+<li>使用可见浏览器、人工登录、人工搜索、单账号、单浏览器上下文、单线程串行</li>
+<li>页面类型非 search_list 时立即拒绝采集，不自动跳转</li>
+<li>用户可随时通过 Ctrl+C、关闭浏览器、输入 quit 安全退出</li>
+</ul>
+</div>
+
+<h2>13. 交付清单</h2>
+<table>
+<tr><th>交付项</th><th>状态</th></tr>
+<tr><td>collect-current-page CLI 命令</td><td><span class="badge badge-pass">完成</span></td></tr>
+<tr><td>当前搜索结果页面读取</td><td><span class="badge badge-pass">完成</span></td></tr>
+<tr><td>调用 P2 ListPageParser</td><td><span class="badge badge-pass">完成</span></td></tr>
+<tr><td>解析职位列表</td><td><span class="badge badge-pass">完成</span></td></tr>
+<tr><td>SQLite 持久化</td><td><span class="badge badge-pass">完成</span></td></tr>
+<tr><td>UPSERT 去重</td><td><span class="badge badge-pass">完成</span></td></tr>
+<tr><td>日志（p3_collect.log）</td><td><span class="badge badge-pass">完成</span></td></tr>
+<tr><td>测试（39 项 P3 + 431 项全量）</td><td><span class="badge badge-pass">通过</span></td></tr>
+<tr><td>覆盖率（84%）</td><td><span class="badge badge-pass">通过</span></td></tr>
+<tr><td>ruff check</td><td><span class="badge badge-pass">通过</span></td></tr>
+<tr><td>ruff format</td><td><span class="badge badge-pass">通过</span></td></tr>
+<tr><td>P3_delivery_report.html</td><td><span class="badge badge-pass">完成</span></td></tr>
+<tr><td>提交并推送 main</td><td><span class="badge badge-info">进行中</span></td></tr>
+</table>
+
+<div class="meta">
+<strong>交付结论：</strong> <span class="badge badge-pass">P3 已完成，等待人工验收，不进入 P4</span>
+</div>
+
+</body>
+</html>

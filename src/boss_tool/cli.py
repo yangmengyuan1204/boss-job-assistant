@@ -619,6 +619,61 @@ def parse_fixture(
     )
 
 
+# ==================== P3: 搜索结果列表采集 ====================
+@app.command(name="collect-current-page")
+def collect_current_page(
+    config_dir: Path | None = typer.Option(None, "--config-dir", "-c", help="配置目录"),
+    home_url: str | None = typer.Option(
+        None,
+        "--home-url",
+        help="覆盖首页 URL（仅本地测试或显式覆盖；生产仅允许 BOSS 白名单域名）",
+    ),
+    page_no: int | None = typer.Option(
+        None,
+        "--page-no",
+        help="采集页码（人工指定，记录到 job_list.page_no）",
+    ),
+) -> None:
+    """P3: 采集当前搜索结果页面并写入 SQLite。
+
+    流程：
+    1. 启动可见浏览器（复用 P1 BrowserManager）
+    2. 用户手动登录、手动搜索到目标岗位列表页
+    3. 终端命令：collect / status / quit
+       - collect: 读取当前页面 → P2 parse_list_page → JobListRecord → SQLite UPSERT
+
+    安全规则：
+    - 不自动搜索、不自动翻页、不自动点击岗位、不自动进入详情页
+    - 仅读取用户手动导航到的当前页面
+    - 页面类型必须为 search_list，否则拒绝采集
+    - job_url / company_url 通过 sanitize_url() 脱敏
+    """
+    from boss_tool.collect_runner import run_collect_current_page
+
+    cfg = _load_config_safe(config_dir)
+    _ensure_logging(cfg)
+
+    app_cfg = cfg["app"]
+    project_root = _default_config_dir().parent
+
+    data_dir = Path(app_cfg.data_dir)
+    data_dir.mkdir(parents=True, exist_ok=True)
+    db_path = data_dir / app_cfg.database.sqlite_path
+
+    logs_dir = Path(app_cfg.logs_dir)
+    logs_dir.mkdir(parents=True, exist_ok=True)
+    log_path = logs_dir / "p3_collect.log"
+
+    run_collect_current_page(
+        cfg["runtime"],
+        home_url=home_url,
+        db_path=db_path,
+        log_path=log_path,
+        page_no=page_no,
+        project_root=project_root,
+    )
+
+
 # ==================== 工具函数 ====================
 def _check_writable(test_file: Path) -> None:
     """检查目录可写。"""

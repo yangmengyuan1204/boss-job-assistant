@@ -37,7 +37,7 @@ logger = get_logger(__name__)
 Migration = Callable[[sqlite3.Connection], None]
 
 # 当前 schema 版本（必须与 MIGRATIONS 中最高版本一致）
-CURRENT_SCHEMA_VERSION = 1
+CURRENT_SCHEMA_VERSION = 2
 
 
 # ==================== V1 Schema DDL ====================
@@ -301,10 +301,42 @@ def migration_v1_initial(conn: sqlite3.Connection) -> None:
     conn.executescript(SCHEMA_V1_GEOCODE_CACHE)
 
 
+# ==================== V2 Schema DDL ====================
+SCHEMA_V2_JOB_LIST = """
+CREATE TABLE IF NOT EXISTS job_list (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    job_id       TEXT UNIQUE NOT NULL,
+    title        TEXT,
+    salary       TEXT,
+    company      TEXT,
+    location     TEXT,
+    experience   TEXT,
+    education    TEXT,
+    job_url      TEXT,
+    company_url  TEXT,
+    page_no      INTEGER,
+    collected_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_job_list_job_id  ON job_list(job_id);
+CREATE INDEX IF NOT EXISTS idx_job_list_collected ON job_list(collected_at);
+"""
+
+
+def migration_v2_job_list(conn: sqlite3.Connection) -> None:
+    """V2 迁移：新增 job_list 表。
+
+    用于 P3 搜索结果列表页采集，存储列表页公开可见字段。
+    与 jobs 表独立，不涉及详情页/年龄判断/劳动强度/评分等后续阶段字段。
+    job_id 为去重主键，由 derive_job_id() 推导（URL 路径末段或哈希）。
+    """
+    conn.executescript(SCHEMA_V2_JOB_LIST)
+
+
 # 迁移注册表：版本号 -> 迁移函数。
 # 新增迁移时在此处追加，版本号必须递增。
 MIGRATIONS: dict[int, Migration] = {
     1: migration_v1_initial,
+    2: migration_v2_job_list,
 }
 
 
@@ -438,4 +470,5 @@ __all__ = [
     "MIGRATIONS",
     "Migration",
     "migration_v1_initial",
+    "migration_v2_job_list",
 ]

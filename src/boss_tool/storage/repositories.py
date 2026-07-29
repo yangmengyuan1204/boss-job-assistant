@@ -28,6 +28,7 @@ from boss_tool.logging_config import get_logger
 from boss_tool.models.age import AgeResult
 from boss_tool.models.collection import CollectionMeta
 from boss_tool.models.job import Job
+from boss_tool.models.job_list import JobListRecord
 from boss_tool.models.physical import PhysicalIntensityResult
 from boss_tool.models.recruiter import RecruiterInfo
 from boss_tool.models.run import RunRecord
@@ -850,9 +851,124 @@ class GeocodeCacheRepository:
         return self.conn.execute(self.SELECT_SQL, (query_text,)).fetchone()
 
 
+# ==================== JobListRepository ====================
+class JobListRepository:
+    """P3 搜索结果列表页采集 Repository。
+
+    将 JobListRecord UPSERT 到 job_list 表。
+    与 JobRepository 解耦：job_list 仅存储列表页公开可见字段，
+    不涉及详情页/年龄判断/劳动强度/评分等后续阶段字段。
+
+    去重策略：基于 job_id（UNIQUE 约束），使用 INSERT ... ON CONFLICT DO UPDATE。
+    job_id 由 derive_job_id() 推导（URL 路径末段或 title+company+salary 哈希）。
+    """
+
+    UPSERT_SQL = """
+    INSERT INTO job_list (
+        job_id, title, salary, company, location,
+        experience, education, job_url, company_url,
+        page_no, collected_at
+    ) VALUES (
+        :job_id, :title, :salary, :company, :location,
+        :experience, :education, :job_url, :company_url,
+        :page_no, :collected_at
+    )
+    ON CONFLICT(job_id) DO UPDATE SET
+        title       = excluded.title,
+        salary      = excluded.salary,
+        company     = excluded.company,
+        location    = excluded.location,
+        experience  = excluded.experience,
+        education   = excluded.education,
+        job_url     = excluded.job_url,
+        company_url = excluded.company_url,
+        page_no     = excluded.page_no,
+        collected_at = excluded.collected_at
+    """
+
+    COUNT_SQL = "SELECT COUNT(*) AS cnt FROM job_list"
+
+    COUNT_BY_JOB_ID_SQL = "SELECT COUNT(*) AS cnt FROM job_list WHERE job_id = ?"
+
+    SELECT_ALL_SQL = """
+    SELECT job_id, title, salary, company, location,
+           experience, education, job_url, company_url,
+           page_no, collected_at
+    FROM job_list
+    ORDER BY id
+    """
+
+    def __init__(self, conn: sqlite3.Connection):
+        self.conn = conn
+
+    def save_job_list(self, record: JobListRecord) -> bool:
+        """保存单条 JobListRecord（UPSERT）。
+
+        Args:
+            record: 岗位列表记录
+
+        Returns:
+            True 表示新增，False 表示更新（已存在）
+        """
+        existing = self.conn.execute(self.COUNT_BY_JOB_ID_SQL, (record.job_id,)).fetchone()
+        is_new = existing["cnt"] == 0
+
+        self.conn.execute(
+            self.UPSERT_SQL,
+            {
+                "job_id": record.job_id,
+                "title": record.title,
+                "salary": record.salary,
+                "company": record.company,
+                "location": record.location,
+                "experience": record.experience,
+                "education": record.education,
+                "job_url": record.job_url,
+                "company_url": record.company_url,
+                "page_no": record.page_no,
+                "collected_at": _to_iso(record.collected_at),
+            },
+        )
+        return is_new
+
+    def bulk_upsert_job_list(self, records: list[JobListRecord]) -> tuple[int, int]:
+        """批量 UPSERT JobListRecord。
+
+        Args:
+            records: 岗位列表记录列表
+
+        Returns:
+            (新增数量, 更新数量)
+        """
+        new_count = 0
+        update_count = 0
+        for record in records:
+            is_new = self.save_job_list(record)
+            if is_new:
+                new_count += 1
+            else:
+                update_count += 1
+        return (new_count, update_count)
+
+    def count(self) -> int:
+        """返回 job_list 表总记录数。"""
+        row = self.conn.execute(self.COUNT_SQL).fetchone()
+        return int(row["cnt"])
+
+    def exists(self, job_id: str) -> bool:
+        """检查指定 job_id 是否已存在。"""
+        row = self.conn.execute(self.COUNT_BY_JOB_ID_SQL, (job_id,)).fetchone()
+        return int(row["cnt"]) > 0
+
+    def get_all(self) -> list[sqlite3.Row]:
+        """返回所有记录（按插入顺序）。"""
+        return self.conn.execute(self.SELECT_ALL_SQL).fetchall()
+
+
 __all__ = [
     "JobRepository",
     "CollectionMetaRepository",
     "RunLogRepository",
     "GeocodeCacheRepository",
+    "JobListRepository",
 ]

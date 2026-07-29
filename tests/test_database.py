@@ -752,10 +752,10 @@ class TestMigrations:
 
         db.close()
 
-    def test_schema_version_is_one(self, tmp_db_path: Path):
+    def test_schema_version_is_current(self, tmp_db_path: Path):
         db = Database(tmp_db_path)
         db.initialize()
-        assert db.get_schema_version() == 1
+        assert db.get_schema_version() == CURRENT_SCHEMA_VERSION
         db.close()
 
     def test_repeat_initialize_no_data_loss(self, tmp_db_path: Path):
@@ -811,9 +811,9 @@ class TestMigrations:
         """已应用的版本不重复运行。"""
         db = Database(tmp_db_path)
         db.initialize()
-        # 应用一次后 schema_version 应为 1
-        assert db.get_schema_version() == 1
-        # 再次 initialize 不应重复执行 migration_v1_initial
+        # 应用一次后 schema_version 应为当前版本
+        assert db.get_schema_version() == CURRENT_SCHEMA_VERSION
+        # 再次 initialize 不应重复执行已应用的迁移
         # 验证方式：在迁移函数上加 spy
         from boss_tool.storage import database as db_module
 
