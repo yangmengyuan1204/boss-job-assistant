@@ -4,20 +4,31 @@
 从 ObservedJobCard 转换而来，仅包含列表页公开可见字段，
 不含详情页、年龄判断、劳动强度、评分等后续阶段字段。
 
+P3.1 新增：
+- UpsertOutcome: 三态 UPSERT 结果（NEW / UPDATED / UNCHANGED）
+- BulkUpsertResult: 批量 UPSERT 结构化统计
+- DiagnosticsSummary: ParseDiagnostics 的安全摘要（仅含计数与字段名，不含页面原文）
+
 去重键 job_id 推导优先级：
 1. 从 job_url 路径提取末段（如 /job_detail/abc.html → abc）
 2. 若 job_url 为空，使用 SHA256(title|company|salary) 前 16 位加 "hash:" 前缀
+
+URL 安全：
+- from_observed_card 在转换边界再次调用 sanitize_url，形成防御性校验
+- 不信任调用者一定已经脱敏
 """
 
 from __future__ import annotations
 
 import hashlib
 from datetime import datetime
+from enum import Enum
 from urllib.parse import urlparse
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from boss_tool.models.observed_page import ObservedJobCard
+from boss_tool.models.observed_page import ObservedJobCard, ParseDiagnostics
+from boss_tool.parsers.sanitization import sanitize_url
 
 
 def derive_job_id(
@@ -105,6 +116,11 @@ class JobListRecord(BaseModel):
     ) -> JobListRecord:
         """从 ObservedJobCard 转换为 JobListRecord。
 
+        在转换边界再次调用 sanitize_url()，形成防御性校验：
+        - 不信任调用者一定已经脱敏
+        - job_url / company_url 任一未通过校验则置为 None
+        - 不会因未脱敏 URL 直接保存到数据库
+
         Args:
             card: P2 解析器产出的岗位卡片
             page_no: 采集页码
@@ -113,8 +129,13 @@ class JobListRecord(BaseModel):
         Returns:
             JobListRecord 实例
         """
+        # URL 二次防御：即使上游未脱敏，此处强制再次校验
+        # sanitize_url(None) / sanitize_url("") → None，安全
+        safe_job_url = sanitize_url(card.job_url) if card.job_url else None
+        safe_company_url = sanitize_url(card.company_url) if card.company_url else None
+
         job_id = derive_job_id(
-            job_url=card.job_url,
+            job_url=safe_job_url,
             title=card.job_name,
             company=card.company_name,
             salary=card.salary_text,
@@ -127,11 +148,128 @@ class JobListRecord(BaseModel):
             location=card.area_text,
             experience=card.experience_text,
             education=card.education_text,
-            job_url=card.job_url,
-            company_url=card.company_url,
+            job_url=safe_job_url,
+            company_url=safe_company_url,
             page_no=page_no,
             collected_at=collected_at or datetime.now(),
         )
 
 
-__all__ = ["JobListRecord", "derive_job_id"]
+class UpsertOutcome(str, Enum):
+    """三态 UPSERT 结果。
+
+    - NEW: 数据库中不存在该 job_id，新增插入
+    - UPDATED: 数据库中已存在该 job_id，且业务字段发生变化
+    - UNCHANGED: 数据库中已存在该 job_id，且业务字段全部相同（仅 collected_at 可能变化）
+    """
+
+    NEW = "new"
+    UPDATED = "updated"
+    UNCHANGED = "unchanged"
+
+
+class BulkUpsertResult(BaseModel):
+    """批量 UPSERT 结构化统计。
+
+    new_count + updated_count + unchanged_count == 输入记录数。
+    不得通过 len(records) - new - updated 伪造 unchanged。
+    """
+
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    new_count: int = Field(default=0, ge=0, description="新增数量")
+    updated_count: int = Field(default=0, ge=0, description="更新数量（业务字段变化）")
+    unchanged_count: int = Field(default=0, ge=0, description="重复数量（业务字段未变）")
+
+    @property
+    def total(self) -> int:
+        """返回总处理数，应等于输入记录数。"""
+        return self.new_count + self.updated_count + self.unchanged_count
+
+
+class DiagnosticsSummary(BaseModel):
+    """ParseDiagnostics 的安全摘要。
+
+    仅包含计数、字段名、选择器名等安全标识。
+    不包含：
+    - 完整原始 HTML
+    - 原始 DOM 片段
+    - 完整匹配文本
+    - 页面原文样本
+
+    字段映射基于现有 ParseDiagnostics 能力：
+    - card_count: diagnostics.card_count
+    - warning_count: len(diagnostics.warnings)
+    - missing_required_fields: diagnostics.missing_required_fields（全部卡片均未命中的必填字段）
+    - missing_field_counts: 每个字段缺失卡片数 = card_count - field_matches[name]
+      （仅当 0 < 缺失数 < card_count 时记录，全缺失由 missing_required_fields 覆盖）
+    - selector_miss_count: field_matches 中命中数为 0 的字段数
+    - fallback_count: len(diagnostics.ambiguous_fields)
+      （现有列表页 diagnostics 不填充 ambiguous_fields，此值当前恒为 0）
+    - parser_success: diagnostics.parser_success
+    - suggest_manual_review: diagnostics.suggest_manual_review
+    """
+
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    card_count: int = Field(default=0, ge=0, description="解析到的岗位卡片数量")
+    warning_count: int = Field(default=0, ge=0, description="诊断警告数量")
+    missing_required_fields: list[str] = Field(
+        default_factory=list, description="全部卡片均未命中的必填字段名"
+    )
+    missing_field_counts: dict[str, int] = Field(
+        default_factory=dict, description="部分卡片缺失的字段名及缺失数"
+    )
+    selector_miss_count: int = Field(default=0, ge=0, description="命中数为 0 的字段数")
+    fallback_count: int = Field(default=0, ge=0, description="多候选回退数量（当前恒为 0）")
+    parser_success: bool = Field(default=False, description="解析是否成功产出结构化数据")
+    suggest_manual_review: bool = Field(default=False, description="是否建议人工复查")
+
+
+def build_diagnostics_summary(diagnostics: ParseDiagnostics) -> DiagnosticsSummary:
+    """从 ParseDiagnostics 构建安全摘要。
+
+    只保留字段名、计数、选择器名等安全标识。
+    不得保留真实页面文本样本。
+
+    Args:
+        diagnostics: P2 解析诊断
+
+    Returns:
+        DiagnosticsSummary 安全摘要
+    """
+    card_count = diagnostics.card_count
+    field_matches = diagnostics.field_matches or {}
+
+    # 每个字段的缺失卡片数 = card_count - 命中数
+    # 命中数可能 > card_count（多值字段 benefits/tags 可有多条），此时缺失数为 0
+    missing_field_counts: dict[str, int] = {}
+    selector_miss_count = 0
+    for name, hits in field_matches.items():
+        if hits == 0:
+            selector_miss_count += 1
+            continue  # 全缺失的字段由 missing_required_fields 覆盖，不重复计入
+        missing = card_count - hits
+        if missing > 0 and missing < card_count:
+            missing_field_counts[name] = missing
+
+    return DiagnosticsSummary(
+        card_count=card_count,
+        warning_count=len(diagnostics.warnings or []),
+        missing_required_fields=list(diagnostics.missing_required_fields or []),
+        missing_field_counts=missing_field_counts,
+        selector_miss_count=selector_miss_count,
+        fallback_count=len(diagnostics.ambiguous_fields or []),
+        parser_success=diagnostics.parser_success,
+        suggest_manual_review=diagnostics.suggest_manual_review,
+    )
+
+
+__all__ = [
+    "JobListRecord",
+    "derive_job_id",
+    "UpsertOutcome",
+    "BulkUpsertResult",
+    "DiagnosticsSummary",
+    "build_diagnostics_summary",
+]

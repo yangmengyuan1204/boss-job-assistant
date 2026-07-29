@@ -20,7 +20,7 @@ import re
 
 from bs4 import BeautifulSoup, Tag
 
-from boss_tool.models.observed_page import ObservedJobCard
+from boss_tool.models.observed_page import ObservedJobCard, ParseDiagnostics
 from boss_tool.parsers.sanitization import sanitize_url
 from boss_tool.parsers.selectors import (
     LIST_CARD_FIELD_SELECTORS,
@@ -144,6 +144,37 @@ def parse_list_page(
     return cards
 
 
+def parse_list_page_with_diagnostics(
+    html: str,
+    base_url: str | None = None,
+) -> tuple[list[ObservedJobCard], ParseDiagnostics]:
+    """解析列表页 HTML 并返回诊断信息。
+
+    复用 P2 已有的 parse_list_page 与 build_list_diagnostics，不重写解析逻辑。
+    使用延迟导入避免与 diagnostics 模块的循环导入。
+
+    Args:
+        html: 列表页 HTML 字符串
+        base_url: 基础 URL（用于相对 URL 转换）
+
+    Returns:
+        (cards, diagnostics): 卡片列表与解析诊断
+    """
+    # 延迟导入：diagnostics.py 依赖 list_page.py，避免循环导入
+    from boss_tool.parsers.diagnostics import build_list_diagnostics
+
+    soup = BeautifulSoup(html, "lxml")
+    card_tags = find_job_cards(soup)
+
+    cards: list[ObservedJobCard] = []
+    for index, card_tag in enumerate(card_tags):
+        card, _ = _parse_single_card(card_tag, index, base_url=base_url)
+        cards.append(card)
+
+    diagnostics = build_list_diagnostics(soup, cards, base_url=base_url)
+    return cards, diagnostics
+
+
 def parse_single_card(
     card_tag: Tag,
     source_index: int,
@@ -208,6 +239,7 @@ def _parse_single_card(
 
 __all__ = [
     "parse_list_page",
+    "parse_list_page_with_diagnostics",
     "parse_single_card",
     "find_job_cards",
     "SELECTOR_VERSION",

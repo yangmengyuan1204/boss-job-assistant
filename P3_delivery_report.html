@@ -316,5 +316,206 @@ $ python -m ruff format --check src tests
 <strong>交付结论：</strong> <span class="badge badge-pass">P3 已完成，等待人工验收，不进入 P4</span>
 </div>
 
+<!-- ==================== P3.1 章节 ==================== -->
+<h1>P3.1 交付报告 · 接入 Diagnostics 并修复 UPSERT 统计语义</h1>
+
+<div class="meta">
+<strong>阶段：</strong> P3.1（修复 P3 验收问题：Diagnostics 接入 + 三态 UPSERT）<br>
+<strong>P3 基线提交：</strong> <code>c8da6a5e776d26eab3f1e9e36bae991f6afa2fce</code><br>
+<strong>P3.1 结论：</strong> <span class="badge badge-pass">P3.1 已完成，等待人工验收，不进入 P4</span>
+</div>
+
+<h2>P3.1-1. 最新提交 SHA</h2>
+<p><strong>P3.1 提交：</strong> <code id="p31-sha">（提交后填入）</code></p>
+<p><strong>基线：</strong> <code>c8da6a5e776d26eab3f1e9e36bae991f6afa2fce</code>（P3）</p>
+
+<h2>P3.1-2. Diagnostics 真实接入说明</h2>
+<p>P3 原实现直接调用 <code>parse_list_page(raw_html, base_url=raw_url)</code>，未接入 P2 Diagnostics。P3.1 已改为复用 P2 的 <code>parse_list_page_with_diagnostics</code> 入口，该函数返回 <code>(cards, diagnostics)</code> 二元组。</p>
+<p><strong>实际调用代码路径：</strong></p>
+<pre>
+collect_runner._handle_collect()
+  → parse_list_page_with_diagnostics(raw_html, base_url=raw_url)  # P2 入口
+      → find_job_cards(soup)              # P2 选择器
+      → _parse_single_card(...)           # P2 卡片解析
+      → build_list_diagnostics(soup, cards, base_url)  # P2 诊断构建
+      → return (cards, ParseDiagnostics)
+  → build_diagnostics_summary(diagnostics)  # P3.1 安全摘要构建
+  → _output_diagnostics_summary(summary)     # 终端输出（仅计数）
+  → JobListRecord.from_observed_card(card)   # 含 URL 二次防御
+  → JobListRepository.bulk_upsert_job_list() # 三态 UPSERT
+</pre>
+<p><strong>未重写 P2 Parser、Sanitization、Diagnostics 架构。</strong>仅复用已有函数并构建安全摘要。</p>
+
+<h2>P3.1-3. Diagnostics 安全摘要</h2>
+<p>P3.1 新增 <code>DiagnosticsSummary</code> 模型与 <code>build_diagnostics_summary()</code> 函数，将 P2 <code>ParseDiagnostics</code> 转换为仅含计数与字段名的安全摘要，不含任何页面原文。</p>
+<p><strong>DiagnosticsSummary 字段（基于 P2 现有 ParseDiagnostics 能力映射）：</strong></p>
+<table>
+<tr><th>字段</th><th>说明</th><th>数据来源</th></tr>
+<tr><td><code>card_count</code></td><td>解析到的岗位卡片数量</td><td><code>len(cards)</code></td></tr>
+<tr><td><code>warning_count</code></td><td>Parser 警告数量</td><td><code>len(diagnostics.warnings)</code></td></tr>
+<tr><td><code>missing_required_fields</code></td><td>全部缺失的必填字段名列表</td><td>P2 <code>missing_required_fields</code></td></tr>
+<tr><td><code>missing_field_counts</code></td><td>字段名→缺失数 映射</td><td>P2 <code>missing_field_counts</code></td></tr>
+<tr><td><code>selector_miss_count</code></td><td>选择器未命中数量</td><td>P2 <code>selector_miss_count</code></td></tr>
+<tr><td><code>fallback_count</code></td><td>多候选回退数量</td><td>P2 <code>fallback_count</code></td></tr>
+<tr><td><code>parser_success</code></td><td>解析是否成功</td><td>P2 <code>parser_success</code></td></tr>
+<tr><td><code>suggest_manual_review</code></td><td>是否建议人工复查</td><td>综合判断</td></tr>
+</table>
+<p><strong>终端输出示例：</strong></p>
+<pre>
+页面类型: search_list
+发现职位: 26
+诊断警告: 3
+缺失字段:
+  education: 2
+  company_url: 1
+新增: 20
+更新: 3
+重复: 3
+数据库:   job_list
+完成。
+</pre>
+<p><strong>日志安全摘要字段：</strong> <code>diagnostics_warning_count</code>, <code>missing_field_count</code>, <code>missing_fields_summary</code>（仅字段名=计数）, <code>selector_miss_count</code>, <code>fallback_count</code>。</p>
+<p><strong>日志禁止记录：</strong>完整原始 HTML、原始 DOM 片段、完整匹配文本、Cookie、手机号、Email、Token、SecurityId、Authorization、userinfo、URL query/fragment。</p>
+
+<h2>P3.1-4. 三态 UPSERT 设计</h2>
+<p>P3 原实现中 UPSERT 无法区分"更新"和"重复"，导致重复数量永远为 0。P3.1 引入 <code>UpsertOutcome</code> 枚举与 <code>BulkUpsertResult</code> 模型。</p>
+<p><strong>UpsertOutcome 三态：</strong></p>
+<table>
+<tr><th>状态</th><th>含义</th></tr>
+<tr><td><code>NEW</code></td><td>数据库中不存在该 job_id</td></tr>
+<tr><td><code>UPDATED</code></td><td>已存在且业务字段变化</td></tr>
+<tr><td><code>UNCHANGED</code></td><td>已存在且业务字段全部相同（重复）</td></tr>
+</table>
+<p><strong>BulkUpsertResult：</strong></p>
+<pre>
+BulkUpsertResult(
+    new_count: int,
+    updated_count: int,
+    unchanged_count: int,
+)
+# total = new + updated + unchanged == len(records)
+</pre>
+
+<h2>P3.1-5. NEW / UPDATED / UNCHANGED 判断规则</h2>
+<p><strong>业务字段（参与变化判断）：</strong> <code>title</code>, <code>salary</code>, <code>company</code>, <code>location</code>, <code>experience</code>, <code>education</code>, <code>job_url</code>, <code>company_url</code>, <code>page_no</code>。</p>
+<table>
+<tr><th>条件</th><th>结果</th></tr>
+<tr><td>数据库中不存在相同 job_id</td><td><code>NEW</code></td></tr>
+<tr><td>存在相同 job_id 且业务字段任一变化</td><td><code>UPDATED</code></td></tr>
+<tr><td>存在相同 job_id 且业务字段全部相同</td><td><code>UNCHANGED</code></td></tr>
+</table>
+<p><strong>规范化规则：</strong> <code>None</code> 与空字符串 <code>""</code> 统一视为 <code>None</code> 比较，避免 NULL 与空串差异导致误判 UPDATED。</p>
+
+<h2>P3.1-6. collected_at 处理语义</h2>
+<p><code>collected_at</code> <strong>不参与业务字段变化判断</strong>，仅 <code>collected_at</code> 变化时结果为 <code>UNCHANGED</code> 而非 <code>UPDATED</code>。</p>
+<p>UPSERT 时 <code>collected_at</code> 总是被更新为本次采集时间（即使 UNCHANGED），以便跟踪最后一次访问时间。但统计结果仍为 <code>UNCHANGED</code>。</p>
+
+<h2>P3.1-7. 同批次重复 job_id 处理方式</h2>
+<p><code>bulk_upsert_job_list</code> 按顺序逐条调用 <code>save_job_list</code>，每条以之前写入后的数据库行为基线比较。</p>
+<p><strong>示例：</strong> 同批次 3 条 <code>job_id="dup"</code>：</p>
+<ol>
+<li>title="v1" → <code>NEW</code>（DB 无记录）</li>
+<li>title="v2" → <code>UPDATED</code>（DB 为 v1，title 变化）</li>
+<li>title="v2" → <code>UNCHANGED</code>（DB 已为 v2，业务字段全同）</li>
+</ol>
+<p><strong>结果：</strong> new=1, updated=1, unchanged=1, total=3（不超过输入记录数）。整个批量处理位于同一事务中，不为每条记录创建独立连接。</p>
+
+<h2>P3.1-8. URL 二次防御说明</h2>
+<p>P3.1 在 <code>JobListRecord.from_observed_card()</code> 转换边界再次调用 <code>sanitize_url()</code>，形成防御性校验，不信任调用者一定已经脱敏。</p>
+<p><strong>防御规则：</strong></p>
+<ul>
+<li>query 被剥离（返回无 query 的干净 URL）</li>
+<li>fragment 被剥离（返回无 fragment 的干净 URL）</li>
+<li>userinfo URL 被拒绝（返回 None）</li>
+<li>显式端口 URL 被拒绝（返回 None）</li>
+<li>HTTP URL 被拒绝（不自动升级，返回 None）</li>
+<li>非 BOSS 官方域名被拒绝（返回 None）</li>
+</ul>
+<p>同时覆盖 <code>job_url</code> 与 <code>company_url</code>。</p>
+
+<h2>P3.1-9. 异常隔离</h2>
+<p>以下异常不导致命令循环崩溃，仅输出安全错误类型（不含异常原文），写入脱敏日志后返回命令循环：</p>
+<ul>
+<li>Parser 异常 → "解析器异常"</li>
+<li>Diagnostics 处理异常 → 使用空摘要继续</li>
+<li>Pydantic 模型转换异常 → "模型转换异常"</li>
+<li>SQLite 写入异常 → "数据库写入异常"</li>
+<li>日志写入异常 → 仅 logger.warning，不崩溃</li>
+</ul>
+<p><strong>禁止输出：</strong>完整页面 HTML、敏感 URL、数据库完整内容、异常对象中可能包含的页面原文。异常消息不输出到终端或日志。</p>
+
+<h2>P3.1-10. 新增测试列表</h2>
+<table>
+<tr><th>测试类</th><th>测试方法</th><th>覆盖点</th></tr>
+<tr><td rowspan="6">TestJobListRepository</td><td>test_save_new_record</td><td>新记录返回 NEW</td></tr>
+<tr><td>test_save_unchanged_existing</td><td>重复保存返回 UNCHANGED</td></tr>
+<tr><td>test_save_updated_existing</td><td>字段变化返回 UPDATED</td></tr>
+<tr><td>test_only_collected_at_change_is_unchanged</td><td>仅 collected_at 变化仍为 UNCHANGED</td></tr>
+<tr><td>test_bulk_upsert_all_new / all_unchanged_on_repeat / mixed</td><td>批量三态统计</td></tr>
+<tr><td>test_same_batch_duplicate_job_id</td><td>同批次重复 job_id</td></tr>
+<tr><td rowspan="12">TestUrlDefensiveValidation</td><td>test_job_url_query_removed</td><td>job_url query 被剥离</td></tr>
+<tr><td>test_job_url_fragment_removed</td><td>job_url fragment 被剥离</td></tr>
+<tr><td>test_job_url_userinfo_rejected</td><td>job_url userinfo 被拒绝</td></tr>
+<tr><td>test_job_url_explicit_port_rejected</td><td>job_url 显式端口被拒绝</td></tr>
+<tr><td>test_job_url_http_rejected</td><td>job_url HTTP 被拒绝</td></tr>
+<tr><td>test_job_url_non_official_domain_rejected</td><td>job_url 非官方域名被拒绝</td></tr>
+<tr><td>test_company_url_query_removed</td><td>company_url query 被剥离</td></tr>
+<tr><td>test_company_url_userinfo_rejected</td><td>company_url userinfo 被拒绝</td></tr>
+<tr><td>test_company_url_port_rejected</td><td>company_url 显式端口被拒绝</td></tr>
+<tr><td>test_company_url_http_rejected</td><td>company_url HTTP 被拒绝</td></tr>
+<tr><td>test_company_url_non_official_rejected</td><td>company_url 非官方域名被拒绝</td></tr>
+<tr><td>test_clean_official_urls_preserved</td><td>干净官方 URL 被保留</td></tr>
+<tr><td rowspan="2">TestParseListPageWithDiagnostics</td><td>test_returns_cards_and_diagnostics</td><td>返回二元组</td></tr>
+<tr><td>test_empty_page_preserves_diagnostics</td><td>空页面保留 diagnostics</td></tr>
+<tr><td rowspan="2">TestDiagnosticsSummary</td><td>test_summary_contains_counts_only</td><td>摘要仅含计数</td></tr>
+<tr><td>test_summary_excludes_raw_content</td><td>摘要不含页面原文</td></tr>
+<tr><td rowspan="6">TestHandleCollect</td><td>test_collect_upsert_three_state_dedup</td><td>二次采集全部 UNCHANGED</td></tr>
+<tr><td>test_collect_uses_diagnostics_parser</td><td>调用 diagnostics 版本</td></tr>
+<tr><td>test_collect_outputs_three_state_counts</td><td>输出三态数量</td></tr>
+<tr><td>test_collect_parser_exception_does_not_crash</td><td>Parser 异常不崩溃</td></tr>
+<tr><td>test_collect_sqlite_exception_does_not_crash</td><td>SQLite 异常不崩溃</td></tr>
+<tr><td>test_collect_diagnostics_exception_does_not_crash</td><td>Diagnostics 异常不崩溃</td></tr>
+</table>
+
+<h2>P3.1-11. 修改文件列表</h2>
+<table>
+<tr><th>文件</th><th>修改内容</th></tr>
+<tr><td>src/boss_tool/models/job_list.py</td><td>新增 UpsertOutcome / BulkUpsertResult / DiagnosticsSummary / build_diagnostics_summary；from_observed_card URL 二次防御</td></tr>
+<tr><td>src/boss_tool/storage/repositories.py</td><td>save_job_list 返回 UpsertOutcome；bulk_upsert_job_list 返回 BulkUpsertResult；新增业务字段比较</td></tr>
+<tr><td>src/boss_tool/collect_runner.py</td><td>接入 parse_list_page_with_diagnostics；三态统计输出；异常隔离；诊断安全摘要日志</td></tr>
+<tr><td>src/boss_tool/parsers/list_page.py</td><td>新增 parse_list_page_with_diagnostics 函数（复用 P2 Parser + Diagnostics）</td></tr>
+<tr><td>tests/test_job_list.py</td><td>三态 UPSERT 测试；URL 二次防御测试；Diagnostics 摘要测试</td></tr>
+<tr><td>tests/test_collect_runner.py</td><td>Diagnostics 接入测试；三态输出测试；异常隔离测试</td></tr>
+<tr><td>tests/automation/*.py</td><td>ruff format 格式修正（预存格式问题）</td></tr>
+</table>
+
+<h2>P3.1-12. 测试与质量检查结果</h2>
+<table>
+<tr><th>检查项</th><th>命令</th><th>结果</th></tr>
+<tr><td>pytest</td><td><code>python -m pytest -q</code></td><td><span class="badge badge-pass">591 passed</span></td></tr>
+<tr><td>coverage</td><td><code>python -m pytest --cov=src/boss_tool --cov-report=term-missing</code></td><td><span class="badge badge-pass">84%</span>（与 P3 基线一致）</td></tr>
+<tr><td>ruff check</td><td><code>python -m ruff check .</code></td><td><span class="badge badge-pass">All checks passed</span></td></tr>
+<tr><td>ruff format</td><td><code>python -m ruff format --check src tests</code></td><td><span class="badge badge-pass">65 files already formatted</span></td></tr>
+</table>
+
+<h2>P3.1-13. 范围限制声明</h2>
+<div class="danger-box">
+<p><strong>本阶段未实现（禁止项确认）：</strong></p>
+<ul>
+<li>❌ 未实现自动搜索、自动翻页、自动滚动、自动点击岗位、自动进入详情页</li>
+<li>❌ 未实现自动登录、验证码处理、反检测、stealth、webdriver spoofing</li>
+<li>❌ 未实现代理轮换、Cookie 导出/注入、自动消息、自动投递</li>
+<li>❌ 未实现地址解析、距离计算、年龄判断、Excel 导出</li>
+<li>❌ 未实现 P4 或更后阶段功能</li>
+<li>❌ 未重写 P2 Parser、Sanitization 架构、BrowserManager</li>
+<li>❌ 未修改 P0/P1/P2 已验收数据模型</li>
+<li>❌ 仅做完成 P3 验收所需的最小修复</li>
+</ul>
+</div>
+
+<div class="meta">
+<strong>P3.1 交付结论：</strong> <span class="badge badge-pass">P3.1 已完成，等待人工验收，不进入 P4</span>
+</div>
+
 </body>
 </html>

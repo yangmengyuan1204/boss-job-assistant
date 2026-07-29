@@ -28,7 +28,7 @@ from boss_tool.logging_config import get_logger
 from boss_tool.models.age import AgeResult
 from boss_tool.models.collection import CollectionMeta
 from boss_tool.models.job import Job
-from boss_tool.models.job_list import JobListRecord
+from boss_tool.models.job_list import BulkUpsertResult, JobListRecord, UpsertOutcome
 from boss_tool.models.physical import PhysicalIntensityResult
 from boss_tool.models.recruiter import RecruiterInfo
 from boss_tool.models.run import RunRecord
@@ -861,7 +861,30 @@ class JobListRepository:
 
     去重策略：基于 job_id（UNIQUE 约束），使用 INSERT ... ON CONFLICT DO UPDATE。
     job_id 由 derive_job_id() 推导（URL 路径末段或 title+company+salary 哈希）。
+
+    P3.1 三态 UPSERT：
+    - NEW: 数据库中不存在该 job_id
+    - UPDATED: 已存在且业务字段（title/salary/company/location/experience/
+      education/job_url/company_url/page_no）任一变化
+    - UNCHANGED: 已存在且业务字段全部相同（仅 collected_at 可能变化）
+    - UNCHANGED 时仍更新 collected_at（记录最近一次采集时间），但统计为重复
+    - 同一批次内相同 job_id：第二条以第一条写入后的行为基线比较
+      （顺序处理，统计总数 == 输入记录数，不会超过输入）
     """
+
+    # 业务字段：用于判断 NEW / UPDATED / UNCHANGED
+    # collected_at 不参与变化判断
+    BUSINESS_FIELDS = (
+        "title",
+        "salary",
+        "company",
+        "location",
+        "experience",
+        "education",
+        "job_url",
+        "company_url",
+        "page_no",
+    )
 
     UPSERT_SQL = """
     INSERT INTO job_list (
@@ -890,6 +913,14 @@ class JobListRepository:
 
     COUNT_BY_JOB_ID_SQL = "SELECT COUNT(*) AS cnt FROM job_list WHERE job_id = ?"
 
+    SELECT_BY_JOB_ID_SQL = """
+    SELECT job_id, title, salary, company, location,
+           experience, education, job_url, company_url,
+           page_no, collected_at
+    FROM job_list
+    WHERE job_id = ?
+    """
+
     SELECT_ALL_SQL = """
     SELECT job_id, title, salary, company, location,
            experience, education, job_url, company_url,
@@ -901,17 +932,48 @@ class JobListRepository:
     def __init__(self, conn: sqlite3.Connection):
         self.conn = conn
 
-    def save_job_list(self, record: JobListRecord) -> bool:
-        """保存单条 JobListRecord（UPSERT）。
+    def get_by_job_id(self, job_id: str) -> sqlite3.Row | None:
+        """按 job_id 查询现有记录。不存在返回 None。"""
+        return self.conn.execute(self.SELECT_BY_JOB_ID_SQL, (job_id,)).fetchone()
+
+    @staticmethod
+    def _business_fields_equal(record: JobListRecord, existing: sqlite3.Row) -> bool:
+        """比较 record 与现有行的业务字段是否全部相同。
+
+        collected_at 不参与比较（不单独导致 UPDATED）。
+        None 与 NULL 视为相同（数据库 NULL 与 Python None）。
+        空字符串与 NULL 视为相同（防御性规范化）。
+        """
+        for field in JobListRepository.BUSINESS_FIELDS:
+            new_val = getattr(record, field)
+            old_val = existing[field] if field in existing.keys() else None  # noqa: SIM118, SIM401 (sqlite3.Row 无 .get())
+            # 规范化：None / "" 统一为 None 比较
+            new_norm = new_val if new_val not in (None, "") else None
+            old_norm = old_val if old_val not in (None, "") else None
+            if new_norm != old_norm:
+                return False
+        return True
+
+    def save_job_list(self, record: JobListRecord) -> UpsertOutcome:
+        """保存单条 JobListRecord（三态 UPSERT）。
 
         Args:
             record: 岗位列表记录
 
         Returns:
-            True 表示新增，False 表示更新（已存在）
+            UpsertOutcome.NEW / UPDATED / UNCHANGED
+            - NEW: 数据库中不存在该 job_id
+            - UPDATED: 已存在且业务字段变化
+            - UNCHANGED: 已存在且业务字段全部相同（collected_at 仍被更新）
         """
-        existing = self.conn.execute(self.COUNT_BY_JOB_ID_SQL, (record.job_id,)).fetchone()
-        is_new = existing["cnt"] == 0
+        existing = self.get_by_job_id(record.job_id)
+
+        if existing is None:
+            outcome = UpsertOutcome.NEW
+        elif self._business_fields_equal(record, existing):
+            outcome = UpsertOutcome.UNCHANGED
+        else:
+            outcome = UpsertOutcome.UPDATED
 
         self.conn.execute(
             self.UPSERT_SQL,
@@ -929,26 +991,31 @@ class JobListRepository:
                 "collected_at": _to_iso(record.collected_at),
             },
         )
-        return is_new
+        return outcome
 
-    def bulk_upsert_job_list(self, records: list[JobListRecord]) -> tuple[int, int]:
+    def bulk_upsert_job_list(self, records: list[JobListRecord]) -> BulkUpsertResult:
         """批量 UPSERT JobListRecord。
+
+        顺序处理：每条记录以之前写入后的数据库行为基线比较。
+        同一批次内相同 job_id 不会导致统计超过输入记录数。
 
         Args:
             records: 岗位列表记录列表
 
         Returns:
-            (新增数量, 更新数量)
+            BulkUpsertResult(new_count, updated_count, unchanged_count)
+            new + updated + unchanged == len(records)
         """
-        new_count = 0
-        update_count = 0
+        result = BulkUpsertResult()
         for record in records:
-            is_new = self.save_job_list(record)
-            if is_new:
-                new_count += 1
+            outcome = self.save_job_list(record)
+            if outcome == UpsertOutcome.NEW:
+                result.new_count += 1
+            elif outcome == UpsertOutcome.UPDATED:
+                result.updated_count += 1
             else:
-                update_count += 1
-        return (new_count, update_count)
+                result.unchanged_count += 1
+        return result
 
     def count(self) -> int:
         """返回 job_list 表总记录数。"""
