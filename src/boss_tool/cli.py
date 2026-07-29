@@ -546,6 +546,79 @@ def export(
     _not_implemented("export")
 
 
+# ==================== P2: 公开页面侦察与本地解析 ====================
+@app.command(name="observe-page")
+def observe_page(
+    config_dir: Path | None = typer.Option(None, "--config-dir", "-c", help="配置目录"),
+    home_url: str | None = typer.Option(
+        None,
+        "--home-url",
+        help="覆盖首页 URL（仅本地测试或显式覆盖；生产仅允许 BOSS 白名单域名）",
+    ),
+    output_dir: Path = typer.Option(
+        Path("tests/fixtures/pages"),
+        "--output-dir",
+        "-o",
+        help="fixture 输出目录",
+    ),
+    label: str = typer.Option(
+        "observed_page",
+        "--label",
+        help="fixture 标签（用作文件名）",
+    ),
+) -> None:
+    """P2: 公开页面侦察（可见浏览器，人工导航，只读 DOM）。
+
+    流程：
+    1. 启动可见浏览器（复用 P1 BrowserManager）
+    2. 用户手动登录、手动导航到需侦察的页面
+    3. 终端命令：status / inspect / save-fixture / confirm / quit
+
+    安全规则：
+    - 只读取当前已渲染 DOM，不点击/滚动/导航/刷新/注入脚本
+    - save-fixture 需精确输入 SAVE 确认
+    - 登录页/验证页/未知页（低置信度）禁止保存 fixture
+    - fixture 经过最小化脱敏与二次扫描
+    """
+    from boss_tool.observe_runner import run_observe_page
+
+    cfg = _load_config_safe(config_dir)
+    _ensure_logging(cfg)
+
+    project_root = _default_config_dir().parent
+    run_observe_page(
+        cfg["runtime"],
+        home_url=home_url,
+        output_dir=output_dir,
+        label=label,
+        project_root=project_root,
+    )
+
+
+@app.command(name="parse-fixture")
+def parse_fixture(
+    fixture_path: Path = typer.Argument(..., help="本地 HTML fixture 文件路径"),
+    output_json: bool = typer.Option(False, "--json", help="输出 JSON 格式"),
+    show_diagnostics: bool = typer.Option(False, "--diagnostics", help="输出解析诊断信息"),
+    page_type: str | None = typer.Option(
+        None, "--page-type", help="强制指定页面类型（覆盖自动识别）"
+    ),
+) -> None:
+    """P2: 纯本地 fixture 解析（不启动浏览器、不访问网络）。
+
+    示例：
+        python -m boss_tool parse-fixture tests/fixtures/pages/list_page_basic.html --json --diagnostics
+    """
+    from boss_tool.parse_runner import run_parse_fixture
+
+    run_parse_fixture(
+        fixture_path,
+        output_json=output_json,
+        show_diagnostics=show_diagnostics,
+        force_page_type=page_type,
+    )
+
+
 # ==================== 工具函数 ====================
 def _check_writable(test_file: Path) -> None:
     """检查目录可写。"""

@@ -1,0 +1,364 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>P2 交付报告 - 公开页面侦察、本地HTML夹具与解析基线</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", "Microsoft YaHei", sans-serif; max-width: 1100px; margin: 0 auto; padding: 24px; color: #1f2328; background: #ffffff; line-height: 1.6; }
+  h1 { color: #0969da; border-bottom: 2px solid #0969da; padding-bottom: 8px; font-size: 22px; }
+  h2 { color: #1f2328; border-bottom: 1px solid #d0d7de; padding-bottom: 6px; margin-top: 32px; font-size: 18px; }
+  h3 { color: #57606a; font-size: 15px; margin-top: 20px; }
+  code, pre { font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace; }
+  code { background: #f6f8fa; padding: 2px 6px; border-radius: 4px; font-size: 13px; }
+  pre { background: #f6f8fa; padding: 12px; border-radius: 6px; overflow-x: auto; font-size: 12px; line-height: 1.5; border: 1px solid #d0d7de; }
+  table { border-collapse: collapse; width: 100%; margin: 12px 0; font-size: 13px; }
+  th, td { border: 1px solid #d0d7de; padding: 8px 12px; text-align: left; }
+  th { background: #f6f8fa; font-weight: 600; }
+  tr:nth-child(even) { background: #fbfcfd; }
+  .badge { display: inline-block; padding: 2px 8px; border-radius: 12px; font-size: 12px; font-weight: 600; }
+  .badge-pass { background: #dcfcce; color: #1a7f37; }
+  .badge-warn { background: #fff8c5; color: #9a6700; }
+  .badge-fail { background: #ffebe9; color: #cf222e; }
+  .badge-info { background: #ddf4ff; color: #0969da; }
+  .meta { background: #f6f8fa; padding: 12px 16px; border-radius: 6px; border-left: 4px solid #0969da; margin: 16px 0; }
+  .warn-box { background: #fff8c5; border-left: 4px solid #d4a72c; padding: 12px 16px; border-radius: 4px; margin: 12px 0; }
+  .danger-box { background: #ffebe9; border-left: 4px solid #cf222e; padding: 12px 16px; border-radius: 4px; margin: 12px 0; }
+  .success-box { background: #dcfcce; border-left: 4px solid #1a7f37; padding: 12px 16px; border-radius: 4px; margin: 12px 0; }
+  ul { padding-left: 20px; }
+  li { margin: 4px 0; }
+  .small { font-size: 12px; color: #57606a; }
+  .file-list { columns: 2; column-gap: 24px; }
+  .file-list li { break-inside: avoid; }
+</style>
+</head>
+<body>
+
+<h1>P2 交付报告 · 公开页面侦察、本地HTML夹具与解析基线</h1>
+
+<div class="meta">
+  <strong>阶段：</strong> P2<br>
+  <strong>基线提交：</strong> <code>9899f8e7715002c0963b35e077007c18d74303d2</code> (P1.1)<br>
+  <strong>已验收状态：</strong> P0 PASS · P0.1 PASS · P1 PASS · P1.1 PASS<br>
+  <strong>交付结论：</strong> <span class="badge badge-pass">P2 已完成，等待人工验收，不进入 P3</span>
+</div>
+
+<h2>1. 最新提交 SHA</h2>
+<p>本报告生成时尚未提交，提交后 SHA 将更新。基线：<code>9899f8e</code>（P1.1）。</p>
+
+<h2>2. 修改文件列表</h2>
+
+<h3>2.1 新增文件（源码）</h3>
+<table>
+  <tr><th>文件</th><th>职责</th></tr>
+  <tr><td><code>src/boss_tool/models/observed_page.py</code></td><td>P2 专用数据模型：PageType / PageTypeDetection / ObservedJobCard / ObservedJobDetail / ParseDiagnostics / FixtureMeta</td></tr>
+  <tr><td><code>src/boss_tool/parsers/selectors.py</code></td><td>集中式选择器候选定义（页面级/卡片级/字段级），含 SELECTOR_VERSION</td></tr>
+  <tr><td><code>src/boss_tool/parsers/page_types.py</code></td><td>页面类型识别（URL+DOM 双源，置信度评分，多类型冲突保守返回 UNKNOWN）</td></tr>
+  <tr><td><code>src/boss_tool/parsers/list_page.py</code></td><td>搜索列表页解析（卡片定位、字段提取、多选择器回退、顺序保持）</td></tr>
+  <tr><td><code>src/boss_tool/parsers/detail_page.py</code></td><td>岗位详情页解析（详情主容器定位、字段提取、描述换行规范化）</td></tr>
+  <tr><td><code>src/boss_tool/parsers/sanitization.py</code></td><td>HTML 脱敏与最小化（标签删除/属性白名单/文本脱敏/二次扫描）</td></tr>
+  <tr><td><code>src/boss_tool/parsers/diagnostics.py</code></td><td>解析诊断构建器（root_matches / field_matches / missing_required_fields / ambiguous_fields）</td></tr>
+  <tr><td><code>src/boss_tool/browser/observer.py</code></td><td>页面侦察器（基于 Playwright Page，只读 DOM，输出 status/inspect 摘要）</td></tr>
+  <tr><td><code>src/boss_tool/fixtures.py</code></td><td>fixture 保存与元数据管理（脱敏 + SHA256 + FixtureMeta JSON）</td></tr>
+  <tr><td><code>src/boss_tool/observe_runner.py</code></td><td>observe-page 命令核心逻辑（命令循环：status/inspect/save-fixture/confirm/quit）</td></tr>
+  <tr><td><code>src/boss_tool/parse_runner.py</code></td><td>parse-fixture 命令核心逻辑（纯本地解析，不启动浏览器）</td></tr>
+</table>
+
+<h3>2.2 修改文件</h3>
+<table>
+  <tr><th>文件</th><th>变更说明</th></tr>
+  <tr><td><code>pyproject.toml</code></td><td>新增 beautifulsoup4、lxml 依赖（P2 本地解析）；不引入 Selenium/Scrapy/stealth</td></tr>
+  <tr><td><code>src/boss_tool/cli.py</code></td><td>新增 observe-page 与 parse-fixture 两个 CLI 命令注册</td></tr>
+  <tr><td><code>src/boss_tool/browser/__init__.py</code></td><td>导出 PageObserver</td></tr>
+  <tr><td><code>src/boss_tool/parsers/__init__.py</code></td><td>导出 P2 解析器公共 API</td></tr>
+  <tr><td><code>tests/conftest.py</code></td><td>新增 8 个 fixture HTML 加载函数与 fixtures_dir fixture</td></tr>
+</table>
+
+<h3>2.3 新增测试与 fixture</h3>
+<ul class="file-list">
+  <li><code>tests/fixtures/pages/list_page_basic.html</code></li>
+  <li><code>tests/fixtures/pages/list_page_missing_fields.html</code></li>
+  <li><code>tests/fixtures/pages/detail_page_basic.html</code></li>
+  <li><code>tests/fixtures/pages/detail_page_missing_fields.html</code></li>
+  <li><code>tests/fixtures/pages/login_page.html</code></li>
+  <li><code>tests/fixtures/pages/verification_page.html</code></li>
+  <li><code>tests/fixtures/pages/empty_results_page.html</code></li>
+  <li><code>tests/fixtures/pages/unknown_page.html</code></li>
+  <li><code>tests/test_page_types.py</code></li>
+  <li><code>tests/test_sanitization.py</code></li>
+  <li><code>tests/test_list_page.py</code></li>
+  <li><code>tests/test_detail_page.py</code></li>
+  <li><code>tests/test_fixtures_p2.py</code></li>
+  <li><code>tests/test_observer.py</code></li>
+  <li><code>tests/test_parse_cli.py</code></li>
+  <li><code>tests/test_no_network.py</code></li>
+  <li><code>tests/test_observe_runner.py</code></li>
+</ul>
+
+<h2>3. 模块职责</h2>
+<table>
+  <tr><th>模块</th><th>职责</th><th>与 Playwright 关系</th></tr>
+  <tr><td>parsers/page_types</td><td>页面类型识别（URL+DOM 双源）</td><td>完全解耦（仅依赖 BeautifulSoup）</td></tr>
+  <tr><td>parsers/selectors</td><td>集中式选择器候选</td><td>完全解耦</td></tr>
+  <tr><td>parsers/list_page</td><td>列表页卡片与字段解析</td><td>完全解耦</td></tr>
+  <tr><td>parsers/detail_page</td><td>详情页字段解析</td><td>完全解耦</td></tr>
+  <tr><td>parsers/sanitization</td><td>HTML 脱敏与最小化</td><td>完全解耦</td></tr>
+  <tr><td>parsers/diagnostics</td><td>解析诊断构建</td><td>完全解耦</td></tr>
+  <tr><td>browser/observer</td><td>页面侦察（读取当前 DOM）</td><td>依赖 PageLike 协议（仅 url/title/content）</td></tr>
+  <tr><td>fixtures</td><td>fixture 保存与元数据</td><td>完全解耦</td></tr>
+  <tr><td>observe_runner</td><td>observe-page 命令循环</td><td>通过 BrowserManager 间接依赖</td></tr>
+  <tr><td>parse_runner</td><td>parse-fixture 命令</td><td>完全解耦（不导入 Playwright）</td></tr>
+</table>
+
+<h2>4. 页面类型识别逻辑</h2>
+<p>采用 <strong>URL + DOM 双源</strong>识别，输出 <code>PageTypeDetection(page_type, confidence, evidence, warnings)</code>。</p>
+
+<h3>4.1 PageType 枚举</h3>
+<pre>HOME / LOGIN / VERIFICATION / SEARCH_LIST / JOB_DETAIL / EMPTY_RESULTS / ERROR / UNKNOWN</pre>
+
+<h3>4.2 识别规则</h3>
+<ul>
+  <li><strong>URL 路径匹配</strong>：基于 path 模式匹配（如 <code>/web/geek/job</code> → SEARCH_LIST），置信度 0.6</li>
+  <li><strong>DOM 结构匹配</strong>：基于页面级选择器命中数量，置信度 0.5~0.8</li>
+  <li><strong>多类型冲突</strong>：多个类型同时命中时保守返回 <code>UNKNOWN</code></li>
+  <li><strong>不根据 Cookie 判断</strong>登录态；不把"没有登录按钮"等价为"已登录"</li>
+</ul>
+
+<h2>5. 列表页字段定义</h2>
+<p>每个卡片独立解析，保留 <code>source_index</code>，缺失字段为 <code>None</code>，空列表使用 <code>default_factory=list</code>。</p>
+<table>
+  <tr><th>字段</th><th>说明</th><th>必填</th></tr>
+  <tr><td>source_index</td><td>卡片在列表中的原始顺序</td><td>是</td></tr>
+  <tr><td>job_name</td><td>岗位名称</td><td>是（与 job_url 至少其一）</td></tr>
+  <tr><td>job_url</td><td>岗位链接（标准化绝对 URL，去 query/fragment）</td><td>是</td></tr>
+  <tr><td>salary_text</td><td>薪资原文（不做数值解析）</td><td>否</td></tr>
+  <tr><td>area_text</td><td>地区</td><td>否</td></tr>
+  <tr><td>experience_text</td><td>经验要求</td><td>否</td></tr>
+  <tr><td>education_text</td><td>学历要求</td><td>否</td></tr>
+  <tr><td>company_name / company_url / company_industry / company_size</td><td>公司信息</td><td>否</td></tr>
+  <tr><td>recruiter_name / recruiter_title / recruiter_active_text</td><td>招聘者信息</td><td>否</td></tr>
+  <tr><td>benefits / tags</td><td>福利与标签（去重保持顺序）</td><td>否</td></tr>
+  <tr><td>warnings</td><td>卡片级警告</td><td>否</td></tr>
+</table>
+
+<h2>6. 详情页字段定义</h2>
+<p>允许字段缺失，描述保留换行语义、清除连续多余空行。</p>
+<table>
+  <tr><th>字段</th><th>说明</th></tr>
+  <tr><td>job_name / salary_text / location_text / experience_text / education_text</td><td>岗位基本信息</td></tr>
+  <tr><td>description</td><td>岗位描述（保留换行，去除多余空行，不做关键词判断）</td></tr>
+  <tr><td>address_text</td><td>详细地址</td></tr>
+  <tr><td>company_name / company_industry / company_size</td><td>公司信息</td></tr>
+  <tr><td>recruiter_name / recruiter_title / recruiter_active_text</td><td>招聘者信息</td></tr>
+  <tr><td>benefits / tags / warnings</td><td>福利、标签、警告</td></tr>
+</table>
+
+<h2>7. 选择器候选机制</h2>
+<p>使用 <code>@dataclass(frozen=True) SelectorCandidate(name, selectors, required, multiple)</code> 集中管理。</p>
+<ul>
+  <li><strong>分层</strong>：页面级（PAGE_LEVEL_SELECTORS）→ 卡片级（LIST_CARD_ROOT / DETAIL_ROOT）→ 字段级（LIST_CARD_FIELD_SELECTORS / DETAIL_FIELD_SELECTORS）</li>
+  <li><strong>多候选回退</strong>：每个字段允许 <code>tuple[str, ...]</code> 多个选择器，按优先级尝试</li>
+  <li><strong>版本标识</strong>：<code>SELECTOR_VERSION = "p2-v1"</code>，写入 fixture 元数据</li>
+  <li><strong>禁止散落</strong>：所有选择器集中在 <code>parsers/selectors.py</code></li>
+</ul>
+
+<h2>8. fixture 脱敏规则</h2>
+
+<h3>8.1 必须删除的标签</h3>
+<pre>script / style / noscript / iframe / svg / canvas / link / meta / base
+embed / object / template / form / input / button / textarea / select / option</pre>
+
+<h3>8.2 属性白名单</h3>
+<pre>class / id / href / title / aria-label / role / alt</pre>
+<p><code>data-*</code> 属性逐项审核，含 token/session/security/trace/uid/encrypt/csrf/nonce/auth/secret/key/uuid/device 关键字的全部删除。</p>
+
+<h3>8.3 文本脱敏</h3>
+<table>
+  <tr><th>模式</th><th>替换为</th></tr>
+  <tr><td>中国大陆手机号（1[3-9]xxxxxxxxx）</td><td><code>&lt;REDACTED_PHONE&gt;</code></td></tr>
+  <tr><td>邮箱</td><td><code>&lt;REDACTED_EMAIL&gt;</code></td></tr>
+  <tr><td>身份证号（18位）</td><td><code>&lt;REDACTED_ID&gt;</code></td></tr>
+  <tr><td>长 token（≥32 位十六进制）</td><td><code>&lt;REDACTED_TOKEN&gt;</code></td></tr>
+</table>
+
+<h3>8.4 URL 脱敏</h3>
+<ul>
+  <li>相对 URL 转绝对 URL（<code>urljoin</code>）</li>
+  <li>仅允许 HTTP/HTTPS 与 BOSS 直聘官方域名</li>
+  <li>删除 query 与 fragment</li>
+  <li>fixture 内删除全部 query 和 fragment</li>
+</ul>
+
+<h3>8.5 二次扫描</h3>
+<p>fixture 保存后执行 <code>scan_high_risk_content()</code> 二次扫描；发现高风险内容（手机号/邮箱/身份证/token）则抛 <code>ValueError</code> 拒绝写入。</p>
+
+<h2>9. fixture 元数据格式</h2>
+<p>每个 <code>{label}.html</code> 旁保存 <code>{label}.meta.json</code>：</p>
+<pre>{
+  "fixture_version": 1,
+  "captured_at": "2026-07-29T12:00:00",
+  "page_type": "search_list",
+  "source_host": "www.zhipin.com",
+  "source_path": "/web/geek/job",
+  "sanitized": true,
+  "selector_version": "p2-v1",
+  "notes": [],
+  "content_sha256": "..."
+}</pre>
+<p><strong>不保存</strong>：完整原 URL / query / fragment / 用户身份 / Cookie / 浏览器 profile 路径 / 登录状态详情。</p>
+
+<h2>10. observe-page 操作流程</h2>
+<pre>python -m boss_tool observe-page [--output-dir tests/fixtures/pages] [--label list_page_basic]</pre>
+<ol>
+  <li>加载配置，校验 run_control 红线（require_user_confirm / allow_unattended / allow_background）</li>
+  <li>校验 home_url（仅 BOSS 白名单域名，HTTPS，无 query/fragment/userinfo/端口）</li>
+  <li>启动 P1 BrowserManager（可见浏览器，持久化用户目录）</li>
+  <li>用户手动完成登录、手动导航到目标页面</li>
+  <li>命令循环（非阻塞轮询）：
+    <ul>
+      <li><code>status</code>：输出 session 状态、脱敏 URL、页面类型候选、是否允许保存 fixture</li>
+      <li><code>inspect</code>：只读页面侦察（不点击/滚动/导航/刷新），输出诊断摘要</li>
+      <li><code>save-fixture</code>：要求精确输入 <code>SAVE</code> 才保存；登录页/验证页/未知页禁止保存</li>
+      <li><code>confirm</code>：记录用户确认（不代表程序判断登录成功）</li>
+      <li><code>quit</code>：安全关闭</li>
+    </ul>
+  </li>
+  <li>浏览器关闭或 Ctrl+C 触发安全退出</li>
+</ol>
+
+<h2>11. parse-fixture 操作流程</h2>
+<pre>python -m boss_tool parse-fixture tests/fixtures/pages/list_page_basic.html [--json] [--diagnostics] [--page-type TYPE]</pre>
+<ul>
+  <li><strong>不启动浏览器</strong>，不访问网络，不执行 JavaScript</li>
+  <li>仅使用 BeautifulSoup + lxml 解析本地 HTML</li>
+  <li>输出结构化卡片/详情数据与诊断信息</li>
+  <li>支持 <code>--json</code>（JSON 输出）、<code>--diagnostics</code>（诊断摘要）、<code>--page-type</code>（强制指定类型）</li>
+</ul>
+
+<h2>12. 解析诊断结构</h2>
+<pre>class ParseDiagnostics(BaseModel):
+    page_type: PageType
+    selector_version: str
+    root_matches: dict[str, int]        # 页面/卡片级选择器命中数
+    field_matches: dict[str, int]       # 字段级选择器命中数
+    missing_required_fields: list[str]  # 缺失的必填字段
+    ambiguous_fields: list[str]         # 多候选冲突字段
+    warnings: list[str]
+    parser_success: bool</pre>
+<p>解析器不只返回成功/失败，能说明：找到多少卡片、每个选择器命中多少、哪些字段缺失、哪些字段多匹配、是否建议人工复查 fixture。</p>
+
+<h2>13. 测试清单</h2>
+<table>
+  <tr><th>测试文件</th><th>覆盖范围</th></tr>
+  <tr><td>test_page_types.py</td><td>首页/登录/验证/列表/详情/空结果/错误/未知页识别、多类型冲突保守返回</td></tr>
+  <tr><td>test_sanitization.py</td><td>script/style/iframe 删除、inline 事件删除、nonce 删除、手机号/邮箱/身份证/token 脱敏、query 脱敏、二次扫描拒绝、SHA256 一致性</td></tr>
+  <tr><td>test_list_page.py</td><td>标准卡片、多卡片、缺岗位名/URL/薪资/公司/招聘者、标签重复、相对 URL、多候选回退、单卡片异常不影响其他、顺序保持</td></tr>
+  <tr><td>test_detail_page.py</td><td>标准详情、多段描述、缺地址/招聘者/公司、多选择器候选、空字段、非详情页拒绝</td></tr>
+  <tr><td>test_fixtures_p2.py</td><td>fixture 保存、元数据生成、SHA256 校验、完整性验证</td></tr>
+  <tr><td>test_observer.py</td><td>PageObserver inspect/status、无页面处理</td></tr>
+  <tr><td>test_parse_cli.py</td><td>parse-fixture CLI 命令、--json、--diagnostics、文件不存在处理</td></tr>
+  <tr><td>test_observe_runner.py</td><td>observe-page 命令循环、save-fixture SAVE 精确匹配、登录/验证/未知页禁止保存、异常分支、退出条件、入口校验</td></tr>
+  <tr><td>test_no_network.py</td><td>parser 模块不导入 Playwright、parse-fixture 不启动 BrowserManager、socket/requests/httpx/urllib 封锁</td></tr>
+</table>
+
+<h2>14. pytest 完整输出</h2>
+<pre>363 passed in 26.42s</pre>
+<p class="small">包含 P0/P1/P1.1 全部既有测试 + P2 新增测试（339 → 363，新增 24 个 observe_runner 测试，其余 P2 测试已在 339 中）。</p>
+
+<h2>15. coverage 完整输出</h2>
+<pre>Name                                    Stmts   Miss Branch BrPart  Cover
+src\boss_tool\__init__.py                   2      0      0      0   100%
+src\boss_tool\browser\__init__.py            8      0      0      0   100%
+src\boss_tool\browser\commands.py           89     24     16      6    68%
+src\boss_tool\browser\exceptions.py         11      0      0      0   100%
+src\boss_tool\browser\manager.py           258     33     78      7    88%
+src\boss_tool\browser\observer.py           69     13     20      6    72%
+src\boss_tool\browser\session.py            58      0     14      1    99%
+src\boss_tool\browser\signals.py            22      0      0      0   100%
+src\boss_tool\cli.py                       329     63     44     15    79%
+src\boss_tool\config.py                    205      5     32      5    96%
+src\boss_tool\enums.py                     105      0      0      0   100%
+src\boss_tool\fixtures.py                   35      4      2      1    86%
+src\boss_tool\logging_config.py             55      7     18      5    84%
+src\boss_tool\models\observed_page.py       83      0      0      0   100%
+src\boss_tool\observe_runner.py            200     61     56      8    70%
+src\boss_tool\parse_runner.py              111     14     44     10    82%
+src\boss_tool\parsers\__init__.py            8      0      0      0   100%
+src\boss_tool\parsers\detail_page.py       110     25     48      8    74%
+src\boss_tool\parsers\diagnostics.py        70      9     30      6    85%
+src\boss_tool\parsers\list_page.py          102     10     44      6    89%
+src\boss_tool\parsers\page_types.py         97      8     48      5    91%
+src\boss_tool\parsers\sanitization.py     116     10     62      8    90%
+src\boss_tool\parsers\selectors.py          23      8      8      0    48%
+src\boss_tool\storage\database.py            93      2     16      4    94%
+src\boss_tool\storage\migrations.py           7      7      0      0     0%
+src\boss_tool\storage\repositories.py      148      7     36      2    95%
+----------------------------------------------------------------------
+TOTAL                                     2618    317    658    110    86%</pre>
+<p><span class="badge badge-pass">PASS</span> 项目总覆盖率 <strong>86%</strong>（要求 ≥85%）。</p>
+<p class="small">selectors.py 48% 为预定义常量（P3 使用），observe_runner.py 70% 为主路径 CLI 循环（需真实浏览器），migrations.py 0% 为 P0 遗留占位。</p>
+
+<h2>16. ruff 完整输出</h2>
+<pre>All checks passed!</pre>
+<p><span class="badge badge-pass">PASS</span> ruff check 全部通过（E/W/F/I/B/UP/C4/SIM/RET/PT 规则集）。</p>
+
+<h2>17. format 完整输出</h2>
+<pre>55 files already formatted</pre>
+<p><span class="badge badge-pass">PASS</span> ruff format --check 通过。</p>
+
+<h2>18. git diff --stat</h2>
+<pre> pyproject.toml                    |  3 ++
+ src/boss_tool/browser/__init__.py |  3 ++
+ src/boss_tool/cli.py              | 73 +++++++++++++++++++++++++++++++++++++++
+ src/boss_tool/parsers/__init__.py | 50 +++++++++++++++++++++++++--
+ tests/conftest.py                 | 55 +++++++++++++++++++++++++++++
+ 5 files changed, 181 insertions(+), 3 deletions(-)</pre>
+<p class="small">以上为已跟踪文件的 diff；P2 新增文件（11 个源码 + 9 个测试 + 8 个 fixture HTML）尚未被 git 跟踪，将在提交时加入。</p>
+
+<h2>19. 已知限制</h2>
+<ul>
+  <li><strong>selectors.py 覆盖率 48%</strong>：含 P3 预定义的选择器常量（DETAIL_FIELD_SELECTORS 等），P2 阶段部分字段尚未在解析路径中使用。</li>
+  <li><strong>observe_runner.py 覆盖率 70%</strong>：run_observe_page 主路径需要真实 BrowserManager 启动浏览器，无法在单测中覆盖；已通过 mock 覆盖命令循环与校验逻辑。</li>
+  <li><strong>页面类型识别非 100% 准确</strong>：基于公开 DOM 与 URL，不声明绝对准确；多类型冲突时保守返回 UNKNOWN。</li>
+  <li><strong>fixture 脱敏可能过度</strong>：为安全起见，部分 data-* 属性被删除，可能丢失少量非敏感信息。</li>
+  <li><strong>black 不可用</strong>：执行 <code>python -m black --check .</code> 时进程卡住无法完成，已在报告中如实说明，未伪造结果；ruff format 已通过格式检查。</li>
+  <li><strong>真实页面侦察未执行</strong>：Agent 未自动访问真实 BOSS 网站；fixture 均为本地构造的测试夹具，待用户本人执行真实侦察。</li>
+</ul>
+
+<h2>20. 安全声明</h2>
+<div class="danger-box">
+  <strong>永久合规红线（全部遵守）：</strong>
+  <ul>
+    <li>只使用 Playwright 可见浏览器（headless=False），持久化用户目录</li>
+    <li>用户手动登录、手动导航、手动处理验证码/滑块/短信</li>
+    <li>不自动识别验证码、不自动拖动滑块、不读取短信验证码、不自动登录</li>
+    <li>不导入/导出/读取/保存 Cookie，不读取 localStorage/sessionStorage</li>
+    <li>不使用 stealth，不修改 navigator.webdriver，不修改浏览器指纹</li>
+    <li>不使用代理池，不轮换 IP，不切换账号</li>
+    <li>不调用未公开接口，不逆向请求签名</li>
+    <li>不抓取聊天内容，不自动发消息，不自动申请岗位</li>
+    <li>不后台运行，不无人值守运行</li>
+    <li>发现验证码/登录失效/风控提示时：只停止、提示用户、等待处理，不自动绕过</li>
+  </ul>
+</div>
+<div class="warn-box">
+  <strong>fixture 脱敏保障：</strong>
+  <ul>
+    <li>所有 fixture 经 sanitize_html 脱敏（标签删除 + 属性白名单 + 文本脱敏）</li>
+    <li>二次扫描发现高风险内容时拒绝写入并报错</li>
+    <li>元数据不保存完整 URL / query / fragment / 用户身份 / Cookie / profile 路径</li>
+    <li>URL 输出统一使用 redact_url 脱敏（仅保留 scheme://host/path）</li>
+  </ul>
+</div>
+<div class="warn-box">
+  <strong>声明：</strong>本工具仅减少不必要访问与程序失控风险，不能保证账号不受限制，不得用于规避平台检测。
+</div>
+
+<h2>21. 未进入 P3 声明</h2>
+<div class="success-box">
+  <strong>P2 已完成，等待人工验收，不进入 P3。</strong>
+  <p>本阶段未实现任何 P3 及以后功能（自动搜索、自动翻页、批量详情访问、SQLite 岗位写入、地址地理编码、年龄判断、劳动强度判断、岗位分类、评分排序、Excel 导出、resume 机制等）。</p>
+  <p>真实页面侦察必须由用户本人手动执行，Agent 不得自动访问真实 BOSS 网站。</p>
+</div>
+
+</body>
+</html>

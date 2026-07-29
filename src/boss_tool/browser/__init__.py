@@ -47,6 +47,7 @@ from boss_tool.browser.manager import (
     validate_home_url,
     validate_user_data_dir,
 )
+from boss_tool.browser.observer import PageObserver
 from boss_tool.browser.session import BrowserSession
 from boss_tool.browser.signals import BrowserSessionState, CloseSource, can_transition
 
@@ -69,6 +70,8 @@ __all__ = [
     # 管理器
     "BrowserManager",
     "PlaywrightFactory",
+    # 侦察器（P2）
+    "PageObserver",
     # 命令源（P1.1）
     "CommandSource",
     "ThreadedCommandSource",

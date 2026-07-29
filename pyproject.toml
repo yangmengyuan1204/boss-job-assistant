@@ -19,6 +19,9 @@ dependencies = [
     "openpyxl>=3.1",
     # playwright 仅声明依赖，P0 阶段不得用于访问真实网站
     "playwright>=1.40",
+    # P2: 本地 HTML 解析（仅用于解析本地 fixture，不访问网络）
+    "beautifulsoup4>=4.12",
+    "lxml>=4.9",
 ]
 
 [project.optional-dependencies]

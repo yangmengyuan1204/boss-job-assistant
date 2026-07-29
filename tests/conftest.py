@@ -115,3 +115,58 @@ def _reset_logger():
 
 # 防止任何测试意外写入真实 data/logs 目录
 os.environ.setdefault("BOSS_TOOL_TEST_MODE", "1")
+
+
+# ==================== P2 fixture 辅助 ====================
+FIXTURES_DIR = PROJECT_ROOT / "tests" / "fixtures" / "pages"
+
+
+@pytest.fixture
+def fixtures_dir() -> Path:
+    """返回测试 fixture HTML 目录。"""
+    return FIXTURES_DIR
+
+
+def load_fixture(name: str) -> str:
+    """加载测试 fixture HTML 文件内容。"""
+    return (FIXTURES_DIR / name).read_text(encoding="utf-8")
+
+
+@pytest.fixture
+def list_page_basic_html() -> str:
+    return load_fixture("list_page_basic.html")
+
+
+@pytest.fixture
+def list_page_missing_html() -> str:
+    return load_fixture("list_page_missing_fields.html")
+
+
+@pytest.fixture
+def detail_page_basic_html() -> str:
+    return load_fixture("detail_page_basic.html")
+
+
+@pytest.fixture
+def detail_page_missing_html() -> str:
+    return load_fixture("detail_page_missing_fields.html")
+
+
+@pytest.fixture
+def login_page_html() -> str:
+    return load_fixture("login_page.html")
+
+
+@pytest.fixture
+def verification_page_html() -> str:
+    return load_fixture("verification_page.html")
+
+
+@pytest.fixture
+def empty_results_page_html() -> str:
+    return load_fixture("empty_results_page.html")
+
+
+@pytest.fixture
+def unknown_page_html() -> str:
+    return load_fixture("unknown_page.html")
