@@ -150,6 +150,16 @@ _ID_CARD_RE = re.compile(r"(?<!\d)\d{17}[\dXx](?!\d)")
 # 长 token（32位以上的十六进制或base64字符串）
 _LONG_TOKEN_RE = re.compile(r"\b[a-fA-F0-9]{32,}\b|[A-Za-z0-9+/=]{40,}\b")
 
+# ==================== P2.1 URL userinfo 形态模式 ====================
+# 检测 https://name:password@ 或 https://name@ 形态
+# 独立成组便于在 sanitize_html 中于文本脱敏前执行预扫描：
+# 文本脱敏（邮箱正则）会消耗 userinfo 的 @，导致后续扫描无法检测，
+# 因此必须在 sanitize_text 之前对 userinfo 进行专项扫描。
+USERINFO_URL_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"(?i)https?://[^/\s:@]+:[^/\s@]*@"),
+    re.compile(r"(?i)https?://[^/\s:@]+@"),
+)
+
 # ==================== 高风险内容关键词（二次扫描） ====================
 HIGH_RISK_CONTENT_PATTERNS: tuple[re.Pattern[str], ...] = (
     _PHONE_RE,
@@ -163,24 +173,53 @@ HIGH_RISK_CONTENT_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"(?i)localstorage"),
     re.compile(r"(?i)sessionstorage"),
     re.compile(r"(?i)nonce\s*[=:]\s*['\"][^'\"]+['\"]"),
+    # P2.1 新增：URL userinfo 形态防御性扫描
+    # 复用 USERINFO_URL_PATTERNS，作为 sanitize_url 遗漏时的兜底
+    *USERINFO_URL_PATTERNS,
 )
 
 
-def sanitize_url(url: str | None, base: str | None = None) -> str | None:
-    """标准化并脱敏 URL。
+def scan_userinfo(html: str) -> list[str]:
+    """P2.1：仅扫描 URL userinfo 形态。
 
-    1. urljoin 转绝对 URL
-    2. 只允许 http/https
-    3. 只允许 BOSS 官方域名
-    4. 去除 fragment
-    5. 去除 query（防止 token/session/追踪标识）
+    在 sanitize_html 中于文本脱敏前执行，避免邮箱脱敏（_EMAIL_RE）
+    消耗 userinfo 的 @ 导致漏检。userinfo URL 不得出现在 fixture 的
+    任何位置（文本节点或属性），发现即拒绝。
+
+    Args:
+        html: 待扫描的 HTML 字符串
+
+    Returns:
+        违规描述列表（空列表表示通过）
+    """
+    violations: list[str] = []
+    for pattern in USERINFO_URL_PATTERNS:
+        if pattern.search(html):
+            violations.append(f"命中 URL userinfo 模式 {pattern.pattern[:60]}: 已截断")
+    return violations
+
+
+def sanitize_url(url: str | None, base: str | None = None) -> str | None:
+    """标准化并脱敏 URL（P2.1 严格安全版本）。
+
+    严格执行：
+    1. URL 非空，相对 URL 通过 urljoin 转绝对 URL。
+    2. scheme 必须为 https（HTTP 直接拒绝，不自动升级）。
+    3. hostname 必须严格属于 BOSS 官方域名（www.zhipin.com / zhipin.com）。
+    4. username 必须为空。
+    5. password 必须为空。
+    6. 禁止任何显式端口（包括 :443）。
+    7. 访问 parsed.port 时处理可能出现的 ValueError。
+    8. 删除 query。
+    9. 删除 fragment。
+    10. 不使用原始 parsed.netloc 构造输出，只使用经过验证的 hostname。
 
     Args:
         url: 原始 URL
         base: 基础 URL（用于相对 URL 转换）
 
     Returns:
-        脱敏后的 URL（scheme://host/path），非官方域名或非法 URL 返回 None
+        脱敏后的 URL（https://host/path），非官方域名/HTTP/userinfo/显式端口均返回 None
     """
     if not url:
         return None
@@ -200,17 +239,31 @@ def sanitize_url(url: str | None, base: str | None = None) -> str | None:
     except (ValueError, TypeError):
         return None
 
-    # 只允许 http/https
-    if parsed.scheme not in ("http", "https"):
+    # 1. scheme 必须为 https（HTTP 不自动升级，直接拒绝）
+    if parsed.scheme != "https":
         return None
 
-    # 只允许 BOSS 官方域名
+    # 2. userinfo 严格拒绝（username/password 任一存在即拒绝）
+    if parsed.username is not None or parsed.password is not None:
+        return None
+
+    # 3. 禁止任何显式端口（包括 :443）；非法端口格式抛 ValueError 时安全返回 None
+    try:
+        if parsed.port is not None:
+            return None
+    except ValueError:
+        return None
+
+    # 4. hostname 必须严格属于 BOSS 官方域名
     host = (parsed.hostname or "").lower()
     if host not in BOSS_HOSTS:
         return None
 
-    # 去除 query 和 fragment，只保留 scheme://host/path
-    return f"{parsed.scheme}://{parsed.netloc}{parsed.path}"
+    # 5. 路径为空时规范化为 "/"
+    path = parsed.path or "/"
+
+    # 6. 只使用经过验证的 hostname 构造输出，不使用原始 netloc
+    return f"https://{host}{path}"
 
 
 def sanitize_text(text: str | None) -> str | None:
@@ -301,10 +354,12 @@ def sanitize_html(html: str, base_url: str | None = None) -> str:
     2. 删除所有 TAGS_TO_REMOVE 标签（含内容）
     3. unwrap 不在白名单的标签（保留文本与子节点）
     4. 删除非白名单属性与 on* 事件
-    5. URL 属性脱敏
-    6. 文本节点脱敏（手机号/邮箱/身份证/token）
-    7. 空白规范化
-    8. 二次扫描高风险内容，发现则抛 ValueError
+    5. URL 属性脱敏（href 含 userinfo/端口时删除该属性）
+    6. P2.1 userinfo 预扫描：在文本脱敏前检查 userinfo 形态
+       （文本脱敏的邮箱正则会消耗 userinfo 的 @，导致后续扫描漏检）
+    7. 文本节点脱敏（手机号/邮箱/身份证/token）
+    8. 空白规范化
+    9. 二次扫描高风险内容，发现则抛 ValueError
 
     Args:
         html: 原始 HTML 字符串
@@ -338,7 +393,21 @@ def sanitize_html(html: str, base_url: str | None = None) -> str:
     for tag in soup.find_all(True):
         _sanitize_tag(tag, base_url)
 
-    # 4. 脱敏所有文本节点
+    # 4. P2.1 userinfo 预扫描：在文本脱敏前检查 userinfo 形态
+    #    此时 href 中的 userinfo 已被 _sanitize_tag 删除，
+    #    若中间结果仍含 userinfo，必然出现在文本节点或非白名单属性中，
+    #    无法通过后续脱敏安全清理，必须直接拒绝。
+    #    必须在 sanitize_text 之前执行：邮箱正则 _EMAIL_RE 会匹配
+    #    user@host 形态并将其替换为 <REDACTED_EMAIL>，从而消耗 userinfo
+    #    的 @，使最终二次扫描无法检出。
+    intermediate = str(soup)
+    userinfo_violations = scan_userinfo(intermediate)
+    if userinfo_violations:
+        raise ValueError(
+            "二次扫描发现高风险内容，拒绝保存 fixture：\n  - " + "\n  - ".join(userinfo_violations)
+        )
+
+    # 5. 脱敏所有文本节点
     for text_node in soup.find_all(string=True):
         if isinstance(text_node, NavigableString):
             sanitized = sanitize_text(str(text_node))
@@ -346,10 +415,10 @@ def sanitize_html(html: str, base_url: str | None = None) -> str:
             if normalized != str(text_node):
                 text_node.replace_with(NavigableString(normalized))
 
-    # 5. 输出
+    # 6. 输出
     result = str(soup)
 
-    # 6. 二次扫描高风险内容
+    # 7. 二次扫描高风险内容
     violations = scan_high_risk_content(result)
     if violations:
         raise ValueError(
@@ -384,9 +453,11 @@ __all__ = [
     "TAGS_TO_REMOVE",
     "ALLOWED_ATTRS",
     "BOSS_HOSTS",
+    "USERINFO_URL_PATTERNS",
     "sanitize_url",
     "sanitize_text",
     "sanitize_html",
+    "scan_userinfo",
     "scan_high_risk_content",
     "compute_sha256",
 ]

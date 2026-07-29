@@ -36,14 +36,84 @@
 <h1>P2 交付报告 · 公开页面侦察、本地HTML夹具与解析基线</h1>
 
 <div class="meta">
-  <strong>阶段：</strong> P2<br>
-  <strong>基线提交：</strong> <code>9899f8e7715002c0963b35e077007c18d74303d2</code> (P1.1)<br>
-  <strong>已验收状态：</strong> P0 PASS · P0.1 PASS · P1 PASS · P1.1 PASS<br>
-  <strong>交付结论：</strong> <span class="badge badge-pass">P2 已完成，等待人工验收，不进入 P3</span>
+  <strong>阶段：</strong> P2 + P2.1（fixture URL 脱敏边界修复）<br>
+  <strong>P2 基线提交：</strong> <code>3a425e335c7eb138f5cc1bdcc951aec8c8a1d11b</code><br>
+  <strong>P2.1 基线提交：</strong> <code>3a425e3</code>（P2 完成提交）<br>
+  <strong>已验收状态：</strong> P0 PASS · P0.1 PASS · P1 PASS · P1.1 PASS · P2 PASS<br>
+  <strong>交付结论：</strong> <span class="badge badge-pass">P2.1 已完成，等待人工验收，不进入 P3</span>
 </div>
 
 <h2>1. 最新提交 SHA</h2>
-<p>本报告生成时尚未提交，提交后 SHA 将更新。基线：<code>9899f8e</code>（P1.1）。</p>
+<p><strong>P2 提交：</strong> <code>3a425e335c7eb138f5cc1bdcc951aec8c8a1d11b</code></p>
+<p><strong>P2.1 提交：</strong> 提交信息 <code>P2.1: 修复fixture URL userinfo与端口泄露</code>，SHA 将在推送后填入。</p>
+
+<h2>1.1 P2.1 修复概要（fixture URL 脱敏边界）</h2>
+<div class="danger-box">
+  <strong>P2.1 阻塞问题（已修复）：</strong>
+  <p>原 <code>sanitize_url()</code> 使用 <code>parsed.hostname</code> 检查官方域名，但使用原始 <code>parsed.netloc</code> 重建 URL，导致 userinfo 和显式端口可能保留在 fixture 或结构化解析结果中。</p>
+</div>
+
+<h3>修复内容</h3>
+<table>
+  <tr><th>修复项</th><th>原行为</th><th>P2.1 修复后</th></tr>
+  <tr><td>userinfo 泄露</td><td><code>parsed.netloc</code> 保留 <code>user:pass@</code></td><td><code>parsed.username</code> / <code>parsed.password</code> 任一非空即返回 <code>None</code>；不使用 <code>netloc</code> 构造输出</td></tr>
+  <tr><td>显式端口泄露</td><td><code>parsed.netloc</code> 保留 <code>:8443</code></td><td><code>parsed.port</code> 非 <code>None</code> 即返回 <code>None</code>（含 <code>:443</code>）；非法端口格式 <code>ValueError</code> 安全返回 <code>None</code></td></tr>
+  <tr><td>HTTP 自动升级</td><td>HTTP 输入被保留</td><td>HTTP 直接拒绝返回 <code>None</code>，不自动升级为 HTTPS</td></tr>
+  <tr><td>hostname 欺骗</td><td><code>evil.com@www.zhipin.com</code> 可能通过</td><td>严格校验 <code>parsed.hostname</code> 属于 <code>BOSS_HOSTS</code>，userinfo 中伪装域名被拒绝</td></tr>
+  <tr><td>query / fragment</td><td>已删除</td><td>继续删除（不变）</td></tr>
+  <tr><td>空路径</td><td>未规范化</td><td>路径为空时规范化为 <code>/</code></td></tr>
+</table>
+
+<h3>核心逻辑</h3>
+<pre>def sanitize_url(url, base=None):
+    # 1. 非空 + 相对 URL 转 urljoin
+    # 2. scheme != "https" → None（HTTP 不升级）
+    # 3. username/password 任一非空 → None
+    # 4. parsed.port 非 None → None（含 :443）；ValueError → None
+    # 5. hostname 不在 BOSS_HOSTS → None
+    # 6. path 为空 → "/"
+    # 7. 只用 hostname 构造 https://{host}{path}，不用 netloc</pre>
+
+<h3>P2.1 新增：userinfo 预扫描</h3>
+<p>新增 <code>scan_userinfo()</code> 函数与 <code>USERINFO_URL_PATTERNS</code> 常量，在 <code>sanitize_html()</code> 中<strong>于文本脱敏前</strong>执行 userinfo 专项预扫描。</p>
+<div class="warn-box">
+  <strong>原因：</strong>文本脱敏的邮箱正则 <code>_EMAIL_RE</code> 会匹配 <code>user@host</code> 形态并替换为 <code>&lt;REDACTED_EMAIL&gt;</code>，从而消耗 userinfo 的 <code>@</code>，使最终二次扫描无法检出 userinfo。预扫描在 <code>_sanitize_tag</code>（href 已清理）之后、<code>sanitize_text</code> 之前执行，确保 userinfo URL 不得出现在 fixture 的任何位置。
+</div>
+
+<h3>P2.1 新增：恶意 URL 测试矩阵</h3>
+<table>
+  <tr><th>测试类别</th><th>输入示例</th><th>预期</th></tr>
+  <tr><td>userinfo（user:pass@）</td><td><code>https://user:pass@www.zhipin.com/job</code></td><td>拒绝（None）</td></tr>
+  <tr><td>userinfo（仅 user@）</td><td><code>https://user@www.zhipin.com/job</code></td><td>拒绝（None）</td></tr>
+  <tr><td>userinfo（空 name/pass）</td><td><code>https://:pass@www.zhipin.com/job</code></td><td>拒绝（None）</td></tr>
+  <tr><td>显式端口 :443</td><td><code>https://www.zhipin.com:443/job</code></td><td>拒绝（None）</td></tr>
+  <tr><td>显式端口 :8443</td><td><code>https://www.zhipin.com:8443/job</code></td><td>拒绝（None）</td></tr>
+  <tr><td>非法端口格式</td><td><code>https://www.zhipin.com:notaport/job</code></td><td>安全返回 None，不抛异常</td></tr>
+  <tr><td>HTTP scheme</td><td><code>http://www.zhipin.com/job</code></td><td>拒绝（None），不自动升级</td></tr>
+  <tr><td>hostname 欺骗 1</td><td><code>https://evil.com@www.zhipin.com/job</code></td><td>拒绝（None）</td></tr>
+  <tr><td>hostname 欺骗 2</td><td><code>https://www.zhipin.com@evil.com/job</code></td><td>拒绝（None）</td></tr>
+  <tr><td>正常官方 HTTPS</td><td><code>https://www.zhipin.com/job/123</code></td><td>允许保留</td></tr>
+  <tr><td>query + fragment</td><td><code>https://www.zhipin.com/job?token=secret#frag</code></td><td>删除 query/fragment，保留 path</td></tr>
+</table>
+
+<h3>P2.1 新增：HTML 级 href 测试</h3>
+<table>
+  <tr><th>测试</th><th>说明</th></tr>
+  <tr><td><code>test_href_with_userinfo_removed</code></td><td>href 含 <code>user:pass@</code> 时整个 href 属性被删除，文本保留</td></tr>
+  <tr><td><code>test_href_with_user_only_removed</code></td><td>href 含仅 <code>user@</code> 时也删除 href</td></tr>
+  <tr><td><code>test_href_with_explicit_port_removed</code></td><td>href 含 <code>:8443</code> 时 href 被删除</td></tr>
+  <tr><td><code>test_href_with_port_443_removed</code></td><td>href 含 <code>:443</code> 时 href 被删除</td></tr>
+  <tr><td><code>test_normal_href_preserved</code></td><td>正常官方 HTTPS href 保留</td></tr>
+</table>
+
+<h3>P2.1 新增：userinfo 二次扫描防御测试</h3>
+<table>
+  <tr><th>测试</th><th>说明</th></tr>
+  <tr><td><code>test_userinfo_with_password_detected</code></td><td><code>scan_high_risk_content</code> 检出 <code>https://name:password@</code></td></tr>
+  <tr><td><code>test_userinfo_without_password_detected</code></td><td><code>scan_high_risk_content</code> 检出 <code>https://name@</code></td></tr>
+  <tr><td><code>test_normal_url_not_flagged</code></td><td>正常 URL 不被误报为 userinfo</td></tr>
+  <tr><td><code>test_userinfo_in_html_rejected</code></td><td>HTML 文本中出现 userinfo URL 时 <code>sanitize_html</code> 预扫描拒绝</td></tr>
+</table>
 
 <h2>2. 修改文件列表</h2>
 
@@ -261,8 +331,8 @@ embed / object / template / form / input / button / textarea / select / option</
 </table>
 
 <h2>14. pytest 完整输出</h2>
-<pre>363 passed in 26.42s</pre>
-<p class="small">包含 P0/P1/P1.1 全部既有测试 + P2 新增测试（339 → 363，新增 24 个 observe_runner 测试，其余 P2 测试已在 339 中）。</p>
+<pre>392 passed in 15.87s</pre>
+<p class="small">P2 基线 363 → P2.1 后 392（新增 29 个测试：userinfo 测试矩阵 16 个、HTML href 测试 5 个、userinfo 二次扫描 4 个、原有错误测试纠正 4 个）。</p>
 
 <h2>15. coverage 完整输出</h2>
 <pre>Name                                    Stmts   Miss Branch BrPart  Cover
@@ -287,14 +357,14 @@ src\boss_tool\parsers\detail_page.py       110     25     48      8    74%
 src\boss_tool\parsers\diagnostics.py        70      9     30      6    85%
 src\boss_tool\parsers\list_page.py          102     10     44      6    89%
 src\boss_tool\parsers\page_types.py         97      8     48      5    91%
-src\boss_tool\parsers\sanitization.py     116     10     62      8    90%
+src\boss_tool\parsers\sanitization.py     135     10     72      8    91%
 src\boss_tool\parsers\selectors.py          23      8      8      0    48%
 src\boss_tool\storage\database.py            93      2     16      4    94%
 src\boss_tool\storage\migrations.py           7      7      0      0     0%
 src\boss_tool\storage\repositories.py      148      7     36      2    95%
 ----------------------------------------------------------------------
-TOTAL                                     2618    317    658    110    86%</pre>
-<p><span class="badge badge-pass">PASS</span> 项目总覆盖率 <strong>86%</strong>（要求 ≥85%）。</p>
+TOTAL                                     2637    315    668    111    86%</pre>
+<p><span class="badge badge-pass">PASS</span> 项目总覆盖率 <strong>86%</strong>（要求 ≥86%，P2.1 后 sanitization.py 从 90% 提升至 91%）。</p>
 <p class="small">selectors.py 48% 为预定义常量（P3 使用），observe_runner.py 70% 为主路径 CLI 循环（需真实浏览器），migrations.py 0% 为 P0 遗留占位。</p>
 
 <h2>16. ruff 完整输出</h2>
@@ -355,9 +425,24 @@ TOTAL                                     2618    317    658    110    86%</pre>
 
 <h2>21. 未进入 P3 声明</h2>
 <div class="success-box">
-  <strong>P2 已完成，等待人工验收，不进入 P3。</strong>
+  <strong>P2.1 已完成，等待人工验收，不进入 P3。</strong>
+  <p>P2.1 仅修复 fixture URL 脱敏边界问题（userinfo 泄露、显式端口泄露、HTTP 自动升级、hostname 欺骗）及相应测试，未重写 P2 解析器架构，未修改页面选择器，未进入 P3。</p>
   <p>本阶段未实现任何 P3 及以后功能（自动搜索、自动翻页、批量详情访问、SQLite 岗位写入、地址地理编码、年龄判断、劳动强度判断、岗位分类、评分排序、Excel 导出、resume 机制等）。</p>
   <p>真实页面侦察必须由用户本人手动执行，Agent 不得自动访问真实 BOSS 网站。</p>
+</div>
+
+<h2>22. P2.1 范围限制遵守声明</h2>
+<div class="warn-box">
+  <strong>P2.1 严格遵守以下范围限制：</strong>
+  <ul>
+    <li>未重写 P2 解析器架构</li>
+    <li>未修改页面选择器</li>
+    <li>未实现自动搜索 / 自动翻页 / 详情页批量访问</li>
+    <li>未进入 P3</li>
+    <li>未修改 P0/P1 无关模块</li>
+    <li>未为追求覆盖率进行无关重构</li>
+    <li>仅修改 <code>src/boss_tool/parsers/sanitization.py</code> 与 <code>tests/test_sanitization.py</code>，以及本交付报告</li>
+  </ul>
 </div>
 
 </body>
