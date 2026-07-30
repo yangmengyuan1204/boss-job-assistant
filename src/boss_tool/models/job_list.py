@@ -11,7 +11,15 @@ P3.1 新增：
 
 去重键 job_id 推导优先级：
 1. 从 job_url 路径提取末段（如 /job_detail/abc.html → abc）
-2. 若 job_url 为空，使用 SHA256(title|company|salary) 前 16 位加 "hash:" 前缀
+2. 若 job_url 为空，使用 SHA256(title|company|location) 前 16 位加 "hash:" 前缀
+
+P3.2 fallback job_id 稳定性修正：
+- 移除 salary 字段（易变：工资调整不应改变岗位身份）
+- 移除 page_no / collected_at / experience / education（易变采集元数据或次级属性）
+- 保留相对稳定的岗位身份字段：title + company + location
+- location 变化视为不同岗位身份（在测试中明确）
+- 文本规范化：strip + 连续空白折叠 + 空值统一处理
+- 相同 title + company + location 必须产生稳定相同的 fallback job_id
 
 URL 安全：
 - from_observed_card 在转换边界再次调用 sanitize_url，形成防御性校验
@@ -31,23 +39,48 @@ from boss_tool.models.observed_page import ObservedJobCard, ParseDiagnostics
 from boss_tool.parsers.sanitization import sanitize_url
 
 
+def _normalize_identity_text(text: str | None) -> str:
+    """规范化岗位身份文本。
+
+    - strip 首尾空白
+    - 连续空白折叠为单个空格
+    - 空值统一处理为空字符串
+    """
+    if not text:
+        return ""
+    # 折叠连续空白（含换行、制表符）为单个空格
+    import re
+
+    return re.sub(r"\s+", " ", text.strip())
+
+
 def derive_job_id(
     job_url: str | None,
     title: str | None,
     company: str | None,
-    salary: str | None,
+    salary: str | None,  # noqa: ARG001 保留签名兼容，P3.2 不再参与 fallback 哈希
+    location: str | None = None,
 ) -> str:
     """推导岗位去重 job_id。
 
     优先级：
-    1. job_url 路径末段（去 .html 后缀）
-    2. SHA256(title|company|salary) 前 16 位 + "hash:" 前缀
+    1. job_url 路径末段（去 .html 后缀）—— 仍优先，不变
+    2. fallback: SHA256(title|company|location) 前 16 位 + "hash:" 前缀
+
+    P3.2 修正：
+    - fallback 不再包含 salary（工资变化不应改变岗位身份）
+    - fallback 不包含 page_no / collected_at / experience / education
+    - 保留相对稳定的身份字段：title + company + location
+    - 文本规范化：strip + 连续空白折叠
+    - 相同 title + company + location 产生稳定相同的 job_id
+    - location 变化视为不同岗位身份
 
     Args:
         job_url: 已脱敏的岗位 URL（https://host/path，无 query/fragment）
         title: 岗位名称
         company: 公司名
-        salary: 薪资原文
+        salary: 薪资原文（P3.2 起不再参与 fallback，保留参数仅为签名兼容）
+        location: 地区文本（P3.2 新增，参与 fallback 身份）
 
     Returns:
         稳定的 job_id 字符串
@@ -65,8 +98,11 @@ def derive_job_id(
             if last_segment:
                 return last_segment
 
-    # 回退：基于 title + company + salary 的哈希
-    content = f"{title or ''}|{company or ''}|{salary or ''}"
+    # 回退：基于 title + company + location 的哈希（P3.2：移除 salary）
+    norm_title = _normalize_identity_text(title)
+    norm_company = _normalize_identity_text(company)
+    norm_location = _normalize_identity_text(location)
+    content = f"{norm_title}|{norm_company}|{norm_location}"
     return "hash:" + hashlib.sha256(content.encode("utf-8")).hexdigest()[:16]
 
 
@@ -139,6 +175,7 @@ class JobListRecord(BaseModel):
             title=card.job_name,
             company=card.company_name,
             salary=card.salary_text,
+            location=card.area_text,
         )
         return cls(
             job_id=job_id,

@@ -136,6 +136,66 @@ class TestDeriveJobId:
         )
         assert result.startswith("hash:")
 
+    # ==================== P3.2 fallback job_id 稳定性测试 ====================
+    def test_fallback_job_id_ignores_salary(self) -> None:
+        """P3.2：fallback job_id 不包含 salary。
+
+        salary 变化不得改变 fallback job_id（工资调整不应改变岗位身份）。
+        """
+        r1 = derive_job_id(job_url=None, title="前端", company="公司A", salary="20K")
+        r2 = derive_job_id(job_url=None, title="前端", company="公司A", salary="30K")
+        assert r1 == r2
+
+    def test_fallback_job_id_ignores_page_no(self) -> None:
+        """P3.2：fallback job_id 不包含 page_no（采集元数据）。"""
+        # page_no 不作为 derive_job_id 参数，验证不参与
+        r1 = derive_job_id(job_url=None, title="前端", company="公司A", salary="20K")
+        r2 = derive_job_id(job_url=None, title="前端", company="公司A", salary="20K")
+        assert r1 == r2  # 相同输入必相同
+
+    def test_fallback_job_id_normalizes_whitespace(self) -> None:
+        """P3.2：文本规范化——strip + 连续空白折叠。"""
+        r1 = derive_job_id(job_url=None, title="前端", company="公司A", salary="20K")
+        r2 = derive_job_id(job_url=None, title="  前端  ", company="公司A", salary="20K")
+        assert r1 == r2
+        # 连续空白折叠：title 内部多空格/tab 折叠为单空格
+        r3 = derive_job_id(job_url=None, title="前端\t工程师", company="公司A", salary="20K")
+        r4 = derive_job_id(job_url=None, title="前端  工程师", company="公司A", salary="20K")
+        assert r3 == r4
+
+    def test_fallback_job_id_same_identity_is_stable(self) -> None:
+        """P3.2：相同 title + company + location 产生稳定相同的 fallback job_id。"""
+        r1 = derive_job_id(
+            job_url=None, title="前端", company="公司A", salary="20K", location="北京"
+        )
+        r2 = derive_job_id(
+            job_url=None, title="前端", company="公司A", salary="30K", location="北京"
+        )
+        assert r1 == r2
+
+    def test_fallback_job_id_location_change_changes_identity(self) -> None:
+        """P3.2：location 变化视为不同岗位身份，产生不同 fallback job_id。"""
+        r1 = derive_job_id(
+            job_url=None, title="前端", company="公司A", salary="20K", location="北京"
+        )
+        r2 = derive_job_id(
+            job_url=None, title="前端", company="公司A", salary="20K", location="上海"
+        )
+        assert r1 != r2
+
+    def test_url_job_id_still_has_priority(self) -> None:
+        """P3.2：有安全 job_url 时仍优先从 URL 推导，不使用 fallback。"""
+        r_url = derive_job_id(
+            job_url="https://www.zhipin.com/job_detail/abc123.html",
+            title="前端",
+            company="公司A",
+            salary="20K",
+        )
+        assert r_url == "abc123"
+        # fallback 产生 hash 前缀
+        r_hash = derive_job_id(job_url=None, title="前端", company="公司A", salary="20K")
+        assert r_hash.startswith("hash:")
+
 
 # ==================== TestJobListRecord ====================
 class TestJobListRecord:
@@ -264,6 +324,78 @@ class TestJobListRepository:
         finally:
             db.close()
 
+    # ==================== P3.2 page_no 语义修正测试 ====================
+    def test_only_page_no_change_is_unchanged(self, tmp_db_path, tmp_workspace) -> None:
+        """P3.2：仅 page_no 变化（业务字段全相同）返回 UNCHANGED。
+
+        page_no 视为采集元数据（与 collected_at 同级），不参与业务字段比较。
+        原因：同一岗位可能因排序变化从第 1 页移到第 2 页，内容无变化。
+        """
+        db = _new_db(tmp_db_path)
+        try:
+            with db.transaction() as conn:
+                repo = JobListRepository(conn)
+                repo.save_job_list(JobListRecord(job_id="abc", title="t", page_no=1))
+                outcome = repo.save_job_list(JobListRecord(job_id="abc", title="t", page_no=2))
+                assert outcome == UpsertOutcome.UNCHANGED
+        finally:
+            db.close()
+
+    def test_page_no_and_collected_at_change_is_unchanged(self, tmp_db_path, tmp_workspace) -> None:
+        """P3.2：page_no 和 collected_at 同时变化仍为 UNCHANGED。"""
+        db = _new_db(tmp_db_path)
+        try:
+            with db.transaction() as conn:
+                repo = JobListRepository(conn)
+                t1 = datetime(2026, 7, 29, 10, 0, 0)
+                t2 = datetime(2026, 7, 29, 11, 0, 0)
+                repo.save_job_list(
+                    JobListRecord(job_id="abc", title="t", page_no=1, collected_at=t1)
+                )
+                outcome = repo.save_job_list(
+                    JobListRecord(job_id="abc", title="t", page_no=2, collected_at=t2)
+                )
+                assert outcome == UpsertOutcome.UNCHANGED
+        finally:
+            db.close()
+
+    def test_unchanged_still_refreshes_page_no(self, tmp_db_path, tmp_workspace) -> None:
+        """P3.2：UNCHANGED 时数据库仍更新最新的 page_no。
+
+        统计为 UNCHANGED，但 page_no 作为采集元数据应被刷新。
+        """
+        db = _new_db(tmp_db_path)
+        try:
+            with db.transaction() as conn:
+                repo = JobListRepository(conn)
+                repo.save_job_list(JobListRecord(job_id="abc", title="t", page_no=1))
+                repo.save_job_list(JobListRecord(job_id="abc", title="t", page_no=5))
+                rows = repo.get_all()
+                assert rows[0]["page_no"] == 5
+        finally:
+            db.close()
+
+    def test_business_field_change_with_page_change_is_updated(
+        self, tmp_db_path, tmp_workspace
+    ) -> None:
+        """P3.2：业务字段变化 + page_no 同时变化仍为 UPDATED。
+
+        page_no 不参与判断，但 title/salary 等业务字段任一变化仍 UPDATED。
+        """
+        db = _new_db(tmp_db_path)
+        try:
+            with db.transaction() as conn:
+                repo = JobListRepository(conn)
+                repo.save_job_list(
+                    JobListRecord(job_id="abc", title="前端", salary="20K", page_no=1)
+                )
+                outcome = repo.save_job_list(
+                    JobListRecord(job_id="abc", title="后端", salary="25K", page_no=3)
+                )
+                assert outcome == UpsertOutcome.UPDATED
+        finally:
+            db.close()
+
     def test_bulk_upsert_all_new(self, tmp_db_path, tmp_workspace) -> None:
         """批量保存 3 条新记录返回 new=3，count == 3。"""
         db = _new_db(tmp_db_path)
@@ -366,7 +498,7 @@ class TestJobListRepository:
             db.close()
 
     def test_fallback_hash_dedup(self, tmp_db_path, tmp_workspace) -> None:
-        """无 job_url 但 title+company+salary 相同 → 同一 hash job_id → 去重。"""
+        """无 job_url 但 title+company 相同 → 同一 hash job_id → 去重。"""
         db = _new_db(tmp_db_path)
         try:
             with db.transaction() as conn:
@@ -378,6 +510,46 @@ class TestJobListRepository:
                 )
                 repo.save_job_list(r1)
                 repo.save_job_list(r2)
+                assert repo.count() == 1
+        finally:
+            db.close()
+
+    def test_fallback_salary_change_results_in_updated_not_new(
+        self, tmp_db_path, tmp_workspace
+    ) -> None:
+        """P3.2 仓储集成：无 URL 岗位 salary 变化 → UPDATED 而非 NEW。
+
+        场景：
+        - 第一次保存：title/company/location 固定，salary=A → NEW
+        - 第二次保存：title/company/location 不变，salary=B → UPDATED（不是 NEW）
+        - 数据库总记录数仍为 1
+
+        关键：fallback job_id 不再包含 salary，所以 salary 变化不改 job_id。
+        """
+        db = _new_db(tmp_db_path)
+        try:
+            with db.transaction() as conn:
+                repo = JobListRepository(conn)
+                # 第一次：salary=A
+                jid_a = derive_job_id(
+                    job_url=None, title="前端", company="公司A", salary="20K", location="北京"
+                )
+                r1 = JobListRecord(
+                    job_id=jid_a, title="前端", company="公司A", salary="20K", location="北京"
+                )
+                outcome1 = repo.save_job_list(r1)
+                assert outcome1 == UpsertOutcome.NEW
+
+                # 第二次：salary=B，但身份字段不变
+                jid_b = derive_job_id(
+                    job_url=None, title="前端", company="公司A", salary="30K", location="北京"
+                )
+                assert jid_a == jid_b  # fallback job_id 不因 salary 变化
+                r2 = JobListRecord(
+                    job_id=jid_b, title="前端", company="公司A", salary="30K", location="北京"
+                )
+                outcome2 = repo.save_job_list(r2)
+                assert outcome2 == UpsertOutcome.UPDATED
                 assert repo.count() == 1
         finally:
             db.close()

@@ -865,15 +865,19 @@ class JobListRepository:
     P3.1 三态 UPSERT：
     - NEW: 数据库中不存在该 job_id
     - UPDATED: 已存在且业务字段（title/salary/company/location/experience/
-      education/job_url/company_url/page_no）任一变化
-    - UNCHANGED: 已存在且业务字段全部相同（仅 collected_at 可能变化）
-    - UNCHANGED 时仍更新 collected_at（记录最近一次采集时间），但统计为重复
+      education/job_url/company_url）任一变化
+    - UNCHANGED: 已存在且业务字段全部相同（仅 collected_at / page_no 可能变化）
+    - UNCHANGED 时仍更新 collected_at 与 page_no（采集元数据），但统计为重复
     - 同一批次内相同 job_id：第二条以第一条写入后的行为基线比较
       （顺序处理，统计总数 == 输入记录数，不会超过输入）
+
+    P3.2 变更语义修正：
+    - page_no 从 BUSINESS_FIELDS 移除，视为采集元数据（与 collected_at 同级）
+      原因：同一岗位可能因排序变化从第 1 页移到第 2 页，内容无变化，不应 UPDATED
     """
 
     # 业务字段：用于判断 NEW / UPDATED / UNCHANGED
-    # collected_at 不参与变化判断
+    # collected_at 与 page_no 均不参与变化判断（采集元数据）
     BUSINESS_FIELDS = (
         "title",
         "salary",
@@ -883,7 +887,6 @@ class JobListRepository:
         "education",
         "job_url",
         "company_url",
-        "page_no",
     )
 
     UPSERT_SQL = """
