@@ -37,7 +37,7 @@ logger = get_logger(__name__)
 Migration = Callable[[sqlite3.Connection], None]
 
 # 当前 schema 版本（必须与 MIGRATIONS 中最高版本一致）
-CURRENT_SCHEMA_VERSION = 2
+CURRENT_SCHEMA_VERSION = 3
 
 
 # ==================== V1 Schema DDL ====================
@@ -332,11 +332,53 @@ def migration_v2_job_list(conn: sqlite3.Connection) -> None:
     conn.executescript(SCHEMA_V2_JOB_LIST)
 
 
+# ==================== V3 Schema DDL ====================
+SCHEMA_V3_JOB_DETAIL = """
+CREATE TABLE IF NOT EXISTS job_detail (
+    id                INTEGER PRIMARY KEY AUTOINCREMENT,
+    job_id            TEXT UNIQUE NOT NULL,
+    job_url           TEXT,
+    title             TEXT,
+    salary            TEXT,
+    location          TEXT,
+    experience        TEXT,
+    education         TEXT,
+    employment_type   TEXT,
+    description       TEXT,
+    company           TEXT,
+    company_url       TEXT,
+    company_industry  TEXT,
+    company_size      TEXT,
+    company_stage     TEXT,
+    recruiter_name    TEXT,
+    recruiter_title   TEXT,
+    recruiter_active  TEXT,
+    benefits_json     TEXT,
+    tags_json         TEXT,
+    collected_at      TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_job_detail_job_id    ON job_detail(job_id);
+CREATE INDEX IF NOT EXISTS idx_job_detail_collected ON job_detail(collected_at);
+"""
+
+
+def migration_v3_job_detail(conn: sqlite3.Connection) -> None:
+    """V3 迁移：新增 job_detail 表。
+
+    用于 P4 详情页人工触发采集，存储详情页公开可见字段。
+    与 job_list 表独立，不破坏已有 job_list 表。
+    job_id 为去重主键，与 job_list 同源（复用 P3 derive_job_id 规则）。
+    不保存原始 HTML / Cookie / Token / 手机号 / 邮箱 / 聊天记录。
+    """
+    conn.executescript(SCHEMA_V3_JOB_DETAIL)
+
+
 # 迁移注册表：版本号 -> 迁移函数。
 # 新增迁移时在此处追加，版本号必须递增。
 MIGRATIONS: dict[int, Migration] = {
     1: migration_v1_initial,
     2: migration_v2_job_list,
+    3: migration_v3_job_detail,
 }
 
 
@@ -471,4 +513,5 @@ __all__ = [
     "Migration",
     "migration_v1_initial",
     "migration_v2_job_list",
+    "migration_v3_job_detail",
 ]

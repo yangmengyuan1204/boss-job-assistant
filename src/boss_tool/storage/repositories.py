@@ -28,6 +28,7 @@ from boss_tool.logging_config import get_logger
 from boss_tool.models.age import AgeResult
 from boss_tool.models.collection import CollectionMeta
 from boss_tool.models.job import Job
+from boss_tool.models.job_detail import DetailUpsertOutcome, JobDetailRecord
 from boss_tool.models.job_list import BulkUpsertResult, JobListRecord, UpsertOutcome
 from boss_tool.models.physical import PhysicalIntensityResult
 from boss_tool.models.recruiter import RecruiterInfo
@@ -1035,10 +1036,237 @@ class JobListRepository:
         return self.conn.execute(self.SELECT_ALL_SQL).fetchall()
 
 
+# ==================== JobDetailRepository ====================
+class JobDetailRepository:
+    """P4 岗位详情页采集 Repository。
+
+    将 JobDetailRecord UPSERT 到 job_detail 表。
+    与 JobListRepository 解耦：job_detail 仅存储详情页公开可见字段，
+    不涉及年龄判断/劳动强度/评分等后续阶段字段。
+
+    去重策略：基于 job_id（UNIQUE 约束），使用 INSERT ... ON CONFLICT DO UPDATE。
+    job_id 与 job_list 同源（复用 derive_job_id 推导规则）。
+
+    P4 三态 UPSERT：
+    - NEW: 数据库中不存在该 job_id
+    - UPDATED: 已存在且业务字段任一变化
+    - UNCHANGED: 已存在且业务字段全部相同（仅 collected_at 可能变化）
+    - UNCHANGED 时仍更新 collected_at（采集元数据）
+    - collected_at 单独变化不算 UPDATED
+
+    列表/标签类字段比较前必须进行确定性规范化：
+    - 去重（保持首次出现顺序）
+    - JSON 序列化稳定（ensure_ascii=False, sort_keys=False，依赖上游去重）
+    - 空列表与 NULL 视为相同（规范化为 NULL 比较）
+    """
+
+    # 业务字段：用于判断 NEW / UPDATED / UNCHANGED
+    # collected_at 不参与（采集元数据）
+    # description_truncated 不参与（属于解析诊断，不属于业务内容）
+    BUSINESS_FIELDS = (
+        "job_url",
+        "title",
+        "salary",
+        "location",
+        "experience",
+        "education",
+        "employment_type",
+        "description",
+        "company",
+        "company_url",
+        "company_industry",
+        "company_size",
+        "company_stage",
+        "recruiter_name",
+        "recruiter_title",
+        "recruiter_active",
+        "benefits_json",
+        "tags_json",
+    )
+
+    UPSERT_SQL = """
+    INSERT INTO job_detail (
+        job_id, job_url, title, salary, location,
+        experience, education, employment_type, description,
+        company, company_url, company_industry, company_size, company_stage,
+        recruiter_name, recruiter_title, recruiter_active,
+        benefits_json, tags_json, collected_at
+    ) VALUES (
+        :job_id, :job_url, :title, :salary, :location,
+        :experience, :education, :employment_type, :description,
+        :company, :company_url, :company_industry, :company_size, :company_stage,
+        :recruiter_name, :recruiter_title, :recruiter_active,
+        :benefits_json, :tags_json, :collected_at
+    )
+    ON CONFLICT(job_id) DO UPDATE SET
+        job_url           = excluded.job_url,
+        title             = excluded.title,
+        salary            = excluded.salary,
+        location          = excluded.location,
+        experience        = excluded.experience,
+        education         = excluded.education,
+        employment_type   = excluded.employment_type,
+        description       = excluded.description,
+        company           = excluded.company,
+        company_url       = excluded.company_url,
+        company_industry  = excluded.company_industry,
+        company_size      = excluded.company_size,
+        company_stage     = excluded.company_stage,
+        recruiter_name    = excluded.recruiter_name,
+        recruiter_title   = excluded.recruiter_title,
+        recruiter_active  = excluded.recruiter_active,
+        benefits_json     = excluded.benefits_json,
+        tags_json         = excluded.tags_json,
+        collected_at      = excluded.collected_at
+    """
+
+    COUNT_SQL = "SELECT COUNT(*) AS cnt FROM job_detail"
+
+    COUNT_BY_JOB_ID_SQL = "SELECT COUNT(*) AS cnt FROM job_detail WHERE job_id = ?"
+
+    SELECT_BY_JOB_ID_SQL = """
+    SELECT job_id, job_url, title, salary, location,
+           experience, education, employment_type, description,
+           company, company_url, company_industry, company_size, company_stage,
+           recruiter_name, recruiter_title, recruiter_active,
+           benefits_json, tags_json, collected_at
+    FROM job_detail
+    WHERE job_id = ?
+    """
+
+    SELECT_ALL_SQL = """
+    SELECT job_id, job_url, title, salary, location,
+           experience, education, employment_type, description,
+           company, company_url, company_industry, company_size, company_stage,
+           recruiter_name, recruiter_title, recruiter_active,
+           benefits_json, tags_json, collected_at
+    FROM job_detail
+    ORDER BY id
+    """
+
+    def __init__(self, conn: sqlite3.Connection):
+        self.conn = conn
+
+    def get_by_job_id(self, job_id: str) -> sqlite3.Row | None:
+        """按 job_id 查询现有记录。不存在返回 None。"""
+        return self.conn.execute(self.SELECT_BY_JOB_ID_SQL, (job_id,)).fetchone()
+
+    @staticmethod
+    def _normalize_scalar(v: str | None) -> str | None:
+        """规范化标量字段：None / "" 统一为 None。"""
+        if v is None or v == "":
+            return None
+        return v
+
+    @staticmethod
+    def _normalize_list_json(v: str | None) -> str | None:
+        """规范化列表 JSON 字段：None / 空列表 / "[]" 统一为 None。
+
+        数据库中以 JSON 字符串存储列表。比较前需确定性规范化：
+        - None → None
+        - "[]"（空列表 JSON）→ None
+        - 非 JSON 字符串 → 原样返回（不应发生，防御性）
+        - 非空 JSON 列表 → 原样返回（依赖上游去重保证确定性）
+        """
+        if v is None or v == "":
+            return None
+        if v == "[]":
+            return None
+        return v
+
+    @classmethod
+    def _business_fields_equal(cls, record: JobDetailRecord, existing: sqlite3.Row) -> bool:
+        """比较 record 与现有行的业务字段是否全部相同。
+
+        collected_at 不参与比较（不单独导致 UPDATED）。
+        None 与 NULL 视为相同。
+        空字符串与 NULL 视为相同（防御性规范化）。
+        空列表 JSON 与 NULL 视为相同（防御性规范化）。
+        """
+        for field in cls.BUSINESS_FIELDS:
+            if field in ("benefits_json", "tags_json"):
+                # 列表字段：从 record 序列化为 JSON，与数据库中已有的 JSON 比较
+                list_attr = field.replace("_json", "")
+                new_val = _json_dumps(getattr(record, list_attr))
+                old_val = existing[field] if field in existing.keys() else None  # noqa: SIM118, SIM401
+                if cls._normalize_list_json(new_val) != cls._normalize_list_json(old_val):
+                    return False
+            else:
+                # 标量字段
+                new_val = getattr(record, field)
+                old_val = existing[field] if field in existing.keys() else None  # noqa: SIM118, SIM401
+                if cls._normalize_scalar(new_val) != cls._normalize_scalar(old_val):
+                    return False
+        return True
+
+    def save_job_detail(self, record: JobDetailRecord) -> DetailUpsertOutcome:
+        """保存单条 JobDetailRecord（三态 UPSERT）。
+
+        Args:
+            record: 岗位详情记录
+
+        Returns:
+            DetailUpsertOutcome.NEW / UPDATED / UNCHANGED
+            - NEW: 数据库中不存在该 job_id
+            - UPDATED: 已存在且业务字段变化
+            - UNCHANGED: 已存在且业务字段全部相同（collected_at 仍被更新）
+        """
+        existing = self.get_by_job_id(record.job_id)
+
+        if existing is None:
+            outcome = DetailUpsertOutcome.NEW
+        elif self._business_fields_equal(record, existing):
+            outcome = DetailUpsertOutcome.UNCHANGED
+        else:
+            outcome = DetailUpsertOutcome.UPDATED
+
+        self.conn.execute(
+            self.UPSERT_SQL,
+            {
+                "job_id": record.job_id,
+                "job_url": record.job_url,
+                "title": record.title,
+                "salary": record.salary,
+                "location": record.location,
+                "experience": record.experience,
+                "education": record.education,
+                "employment_type": record.employment_type,
+                "description": record.description,
+                "company": record.company,
+                "company_url": record.company_url,
+                "company_industry": record.company_industry,
+                "company_size": record.company_size,
+                "company_stage": record.company_stage,
+                "recruiter_name": record.recruiter_name,
+                "recruiter_title": record.recruiter_title,
+                "recruiter_active": record.recruiter_active,
+                "benefits_json": _json_dumps(record.benefits),
+                "tags_json": _json_dumps(record.tags),
+                "collected_at": _to_iso(record.collected_at),
+            },
+        )
+        return outcome
+
+    def count(self) -> int:
+        """返回 job_detail 表总记录数。"""
+        row = self.conn.execute(self.COUNT_SQL).fetchone()
+        return int(row["cnt"])
+
+    def exists(self, job_id: str) -> bool:
+        """检查指定 job_id 是否已存在。"""
+        row = self.conn.execute(self.COUNT_BY_JOB_ID_SQL, (job_id,)).fetchone()
+        return int(row["cnt"]) > 0
+
+    def get_all(self) -> list[sqlite3.Row]:
+        """返回所有记录（按插入顺序）。"""
+        return self.conn.execute(self.SELECT_ALL_SQL).fetchall()
+
+
 __all__ = [
     "JobRepository",
     "CollectionMetaRepository",
     "RunLogRepository",
     "GeocodeCacheRepository",
     "JobListRepository",
+    "JobDetailRepository",
 ]

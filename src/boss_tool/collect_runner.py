@@ -1,11 +1,15 @@
-"""P3 collect-current-page 命令核心逻辑。
+"""P3/P4 collect-current-page 命令核心逻辑。
 
 流程：
 1. 加载配置，启动 P1 BrowserManager
 2. 用户手动登录、手动搜索
-3. 命令循环：collect / status / quit
-   - collect: 读取当前页面 HTML → P2 parse_list_page_with_diagnostics
+3. 命令循环：collect / detail / status / quit
+   - collect: 读取当前搜索结果列表页 HTML → P2 parse_list_page_with_diagnostics
      → JobListRecord → SQLite 三态 UPSERT (NEW/UPDATED/UNCHANGED)
+     → 诊断安全摘要 + 脱敏日志
+   - detail: 仅采集用户已手动打开的当前岗位详情页
+     → P4 parse_detail_page_with_diagnostics
+     → JobDetailRecord → SQLite 三态 UPSERT
      → 诊断安全摘要 + 脱敏日志
    - status: 输出会话与页面状态
    - quit: 安全关闭
@@ -13,13 +17,21 @@
 严格限制：
 - 不自动搜索、不自动翻页、不自动点击岗位、不自动进入详情页
 - 仅读取用户手动导航到的当前页面
-- 页面类型必须为 SEARCH_LIST，否则拒绝采集
+- collect: 页面类型必须为 SEARCH_LIST，否则拒绝采集
+- detail: 页面类型必须为 JOB_DETAIL，否则拒绝采集
+- detail 不调用 page.goto / locator.click / 任何自动导航
 
 P3.1：
 - 接入 P2 Diagnostics（parse_list_page_with_diagnostics），不再调用无 diagnostics 版本
 - 三态 UPSERT：NEW / UPDATED / UNCHANGED，重复数量不再恒为 0
 - 异常隔离：Parser/Diagnostics/Pydantic/SQLite/日志异常不崩溃命令循环
 - Diagnostics 安全摘要：仅含计数与字段名，不含页面原文
+
+P4：
+- 新增 detail 命令：仅采集用户已手动打开的当前岗位详情页
+- 详情页识别：URL 安全校验 + 页面类型 JOB_DETAIL + 稳定核心结构
+- 详情 UPSERT：NEW / UPDATED / UNCHANGED，列表字段确定性序列化比较
+- 描述安全处理：sanitize_text + 最大长度截断 + 固定警告代码
 """
 
 from __future__ import annotations
@@ -46,15 +58,21 @@ from boss_tool.browser import (
 from boss_tool.config import RuntimeConfig
 from boss_tool.enums import StopReason
 from boss_tool.logging_config import get_logger
+from boss_tool.models.job_detail import (
+    DESCRIPTION_TRUNCATED_CODE,
+    JobDetailRecord,
+)
 from boss_tool.models.job_list import (
     DiagnosticsSummary,
     JobListRecord,
     build_diagnostics_summary,
 )
 from boss_tool.models.observed_page import PageType
+from boss_tool.parsers.detail_page import parse_detail_page_with_diagnostics
 from boss_tool.parsers.list_page import parse_list_page_with_diagnostics
+from boss_tool.parsers.sanitization import sanitize_url
 from boss_tool.storage.database import Database
-from boss_tool.storage.repositories import JobListRepository
+from boss_tool.storage.repositories import JobDetailRepository, JobListRepository
 
 logger = get_logger(__name__)
 
@@ -164,12 +182,12 @@ def run_collect_current_page(
 
     typer.echo("浏览器已启动并打开首页。")
     typer.echo("请在浏览器中手动完成登录，然后手动搜索到目标岗位列表页。")
-    typer.echo("完成后回到终端使用命令：collect / status / quit")
+    typer.echo("完成后回到终端使用命令：collect / detail / status / quit")
     typer.echo("-" * 60)
 
     # 命令源
     if command_source is None:
-        command_source = ThreadedCommandSource(prompt="请输入命令 (collect/status/quit): ")
+        command_source = ThreadedCommandSource(prompt="请输入命令 (collect/detail/status/quit): ")
     command_source.start()
 
     try:
@@ -235,7 +253,7 @@ def _run_collect_loop(
         cmd_lower = cmd.lower()
 
         if not cmd:
-            typer.echo("[提示] 空输入无效。请输入 collect / status / quit。")
+            typer.echo("[提示] 空输入无效。请输入 collect / detail / status / quit。")
             continue
 
         if cmd_lower == "quit":
@@ -251,7 +269,11 @@ def _run_collect_loop(
             _handle_collect(manager, db=db, log_path=log_path, page_no=page_no)
             continue
 
-        typer.echo(f"[提示] 未知命令: {cmd!r}。仅接受 collect / status / quit。")
+        if cmd_lower == "detail":
+            _handle_detail(manager, db=db, log_path=log_path)
+            continue
+
+        typer.echo(f"[提示] 未知命令: {cmd!r}。仅接受 collect / detail / status / quit。")
 
 
 def _get_observer(manager: BrowserManager) -> PageObserver | None:
@@ -282,8 +304,12 @@ def _handle_status(manager: BrowserManager) -> None:
 
     if detection.page_type == PageType.SEARCH_LIST:
         typer.echo("  采集就绪:      可以执行 collect")
+    elif detection.page_type == PageType.JOB_DETAIL:
+        typer.echo("  采集就绪:      可以执行 detail")
     else:
-        typer.echo(f"  采集就绪:      当前页面非搜索结果页({detection.page_type.value})，无法采集")
+        typer.echo(
+            f"  采集就绪:      当前页面非搜索结果页/详情页({detection.page_type.value})，无法采集"
+        )
 
 
 def _handle_collect(
@@ -594,3 +620,353 @@ def _write_collect_log_safe(
     except OSError:
         # 日志写入失败本身不得导致崩溃；仅记录到 logger
         logger.warning("采集日志写入失败，已忽略")
+
+
+# ==================== P4: detail 命令（当前详情页采集） ====================
+def _handle_detail(
+    manager: BrowserManager,
+    *,
+    db: Database,
+    log_path: Path,
+) -> None:
+    """detail 命令：仅采集用户已手动打开的当前岗位详情页。
+
+    P4 严格限制：
+    - 不调用 page.goto / locator.click / 任何自动导航
+    - 不接收 URL 参数
+    - 不根据数据库 job_url 自动导航
+    - 仅读取用户手动打开的当前页面
+    - 页面类型必须为 JOB_DETAIL，否则拒绝采集
+
+    流程：
+    1. 检测页面类型（必须为 JOB_DETAIL）
+    2. 安全校验 URL（sanitize_url，HTTPS + BOSS 官方域名 + 无 userinfo/port/query/fragment）
+    3. 读取当前页面 HTML
+    4. P4 parse_detail_page_with_diagnostics 解析
+    5. 转换 ObservedJobDetail → JobDetailRecord（含描述脱敏与截断）
+    6. SQLite 三态 UPSERT（NEW/UPDATED/UNCHANGED）
+    7. 输出安全的采集结果摘要（不含描述正文）
+    8. 写入采集日志
+
+    异常隔离：页面类型/HTML/Parser/模型转换/Diagnostics/SQLite/日志异常不崩溃
+    """
+    started_at = datetime.now()
+
+    observer = _get_observer(manager)
+    if observer is None:
+        return
+
+    # 1. 检测页面类型
+    try:
+        detection = observer.detect_type()
+    except Exception as exc:  # noqa: BLE001 - 页面类型检测异常需隔离
+        typer.echo(f"[ERROR] 页面类型检测异常: {_safe_error_type(exc)}", err=True)
+        _write_detail_log_safe(
+            log_path,
+            started_at,
+            redacted_url="",
+            page_type="unknown",
+            error_type=_safe_error_type(exc),
+        )
+        return
+
+    typer.echo(f"页面类型: {detection.page_type.value}")
+
+    if detection.page_type != PageType.JOB_DETAIL:
+        typer.echo(
+            f"[ERROR] 当前页面不是岗位详情页({detection.page_type.value})，"
+            "无法采集详情。请手动打开岗位详情页后重试。"
+        )
+        _write_detail_log_safe(
+            log_path,
+            started_at,
+            redacted_url=observer.get_current_url() or "",
+            page_type=detection.page_type.value,
+            error_type="页面类型不匹配",
+            error_detail=detection.page_type.value,
+        )
+        return
+
+    # 2. 读取页面 HTML 与 URL
+    try:
+        raw_html = manager._page.content()  # noqa: SLF001
+        raw_url = manager._page.url  # noqa: SLF001
+    except Exception as exc:  # noqa: BLE001 - 浏览器/页面读取异常需隔离
+        typer.echo(f"[ERROR] 页面读取异常: {_safe_error_type(exc)}", err=True)
+        _write_detail_log_safe(
+            log_path,
+            started_at,
+            redacted_url="",
+            page_type=detection.page_type.value,
+            error_type=_safe_error_type(exc),
+        )
+        return
+
+    # 3. URL 安全校验：sanitize_url 严格校验 HTTPS + BOSS 官方域名 + 无 userinfo/port/query/fragment
+    safe_job_url = sanitize_url(raw_url)
+    if not safe_job_url:
+        typer.echo(
+            "[ERROR] 当前 URL 未通过安全校验"
+            "（需 HTTPS + BOSS 官方域名 + 无 userinfo/port/query/fragment），"
+            "拒绝采集详情。"
+        )
+        _write_detail_log_safe(
+            log_path,
+            started_at,
+            redacted_url=redact_url(raw_url) or "",
+            page_type=detection.page_type.value,
+            error_type="URL 安全校验失败",
+        )
+        return
+
+    redacted_url = redact_url(safe_job_url) or ""
+
+    # 4. P4 parse_detail_page_with_diagnostics 解析（含诊断）
+    try:
+        detail, diagnostics = parse_detail_page_with_diagnostics(raw_html, base_url=safe_job_url)
+    except Exception as exc:  # noqa: BLE001 - Parser/Diagnostics 异常需隔离
+        typer.echo(f"[ERROR] 解析异常: {_safe_error_type(exc)}", err=True)
+        _write_detail_log_safe(
+            log_path,
+            started_at,
+            redacted_url=redacted_url,
+            page_type=detection.page_type.value,
+            error_type=_safe_error_type(exc),
+        )
+        return
+
+    # 解析成功性检查：parse_detail_page_with_diagnostics 在 root 缺失时 parser_success=False
+    if not diagnostics.parser_success:
+        typer.echo(
+            "[ERROR] 详情页核心结构未命中（找不到详情主容器或岗位名称），"
+            "拒绝采集详情。建议人工复查页面或选择器。"
+        )
+        _write_detail_log_safe(
+            log_path,
+            started_at,
+            redacted_url=redacted_url,
+            page_type=detection.page_type.value,
+            error_type="详情页核心结构缺失",
+            diag_summary=_build_detail_diagnostics_summary(diagnostics),
+        )
+        return
+
+    # 构建诊断安全摘要
+    try:
+        diag_summary = _build_detail_diagnostics_summary(diagnostics)
+    except Exception as exc:  # noqa: BLE001 - 诊断摘要构建异常需隔离
+        typer.echo(f"[ERROR] 诊断摘要异常: {_safe_error_type(exc)}", err=True)
+        diag_summary = DiagnosticsSummary()
+
+    # 输出诊断摘要（仅计数与字段名，不含页面原文）
+    _output_diagnostics_summary(diag_summary)
+
+    # 5. 转换 ObservedJobDetail → JobDetailRecord（含描述脱敏与截断）
+    try:
+        collected_at = datetime.now()
+        record = JobDetailRecord.from_observed_detail(
+            detail,
+            job_url=safe_job_url,
+            collected_at=collected_at,
+        )
+    except Exception as exc:  # noqa: BLE001 - Pydantic 模型转换异常需隔离
+        typer.echo(f"[ERROR] 模型转换异常: {_safe_error_type(exc)}", err=True)
+        _write_detail_log_safe(
+            log_path,
+            started_at,
+            redacted_url=redacted_url,
+            page_type=detection.page_type.value,
+            error_type=_safe_error_type(exc),
+            diag_summary=diag_summary,
+        )
+        return
+
+    # 描述安全摘要：仅输出是否获取/字符数/是否截断，不输出描述正文
+    desc_present = record.description is not None
+    desc_len = len(record.description) if record.description else 0
+    typer.echo(f"描述获取: {'是' if desc_present else '否'}")
+    typer.echo(f"描述字符数: {desc_len}")
+    if record.description_truncated:
+        typer.echo(f"描述截断: 是 (代码: {DESCRIPTION_TRUNCATED_CODE})")
+    else:
+        typer.echo("描述截断: 否")
+
+    # 6. SQLite 三态 UPSERT
+    try:
+        with db.transaction() as conn:
+            repo = JobDetailRepository(conn)
+            outcome = repo.save_job_detail(record)
+    except Exception as exc:  # noqa: BLE001 - SQLite 写入异常需隔离
+        typer.echo(f"[ERROR] 数据库写入异常: {_safe_error_type(exc)}", err=True)
+        _write_detail_log_safe(
+            log_path,
+            started_at,
+            redacted_url=redacted_url,
+            page_type=detection.page_type.value,
+            error_type=_safe_error_type(exc),
+            diag_summary=diag_summary,
+        )
+        return
+
+    ended_at = datetime.now()
+    duration = (ended_at - started_at).total_seconds()
+
+    # 7. 输出三态摘要
+    outcome_text = {
+        "new": "新增",
+        "updated": "更新",
+        "unchanged": "重复",
+    }.get(outcome.value, outcome.value)
+    typer.echo(f"结果:     {outcome_text}")
+    typer.echo("数据库:   job_detail")
+    typer.echo(f"耗时:     {duration:.1f}s")
+    typer.echo("完成。")
+
+    # 8. 写入日志（含诊断安全摘要，不含描述正文）
+    try:
+        _write_detail_log(
+            log_path,
+            started_at,
+            ended_at,
+            redacted_url=redacted_url,
+            page_type=detection.page_type.value,
+            outcome=outcome.value,
+            desc_present=desc_present,
+            desc_len=desc_len,
+            desc_truncated=record.description_truncated,
+            diag_summary=diag_summary,
+        )
+    except Exception as exc:  # noqa: BLE001 - 日志写入异常需隔离，不泄露敏感内容
+        typer.echo(f"[ERROR] 日志写入异常: {_safe_error_type(exc)}", err=True)
+
+
+def _build_detail_diagnostics_summary(diagnostics) -> DiagnosticsSummary:  # noqa: ANN001
+    """从详情页 ParseDiagnostics 构建安全摘要。
+
+    复用 P3.1 build_diagnostics_summary 的安全语义。
+    详情页 card_count 恒为 0（详情页无卡片概念），仅统计字段命中与缺失。
+    """
+    # 详情页 field_matches 直接对应字段命中数（0 或 1）
+    # build_diagnostics_summary 期望基于 card_count 计算缺失数，
+    # 详情页 card_count=0 时公式不适用，因此此处直接构建安全摘要
+    field_matches = diagnostics.field_matches or {}
+    selector_miss_count = sum(1 for hits in field_matches.values() if hits == 0)
+    missing_required_fields = list(diagnostics.missing_required_fields or [])
+
+    return DiagnosticsSummary(
+        card_count=0,  # 详情页无卡片概念
+        warning_count=len(diagnostics.warnings or []),
+        missing_required_fields=missing_required_fields,
+        missing_field_counts={},  # 详情页单条记录，不适用部分缺失
+        selector_miss_count=selector_miss_count,
+        fallback_count=len(diagnostics.ambiguous_fields or []),
+        parser_success=diagnostics.parser_success,
+        suggest_manual_review=diagnostics.suggest_manual_review,
+    )
+
+
+def _write_detail_log(
+    log_path: Path,
+    started_at: datetime,
+    ended_at: datetime,
+    *,
+    redacted_url: str,
+    page_type: str,
+    outcome: str,
+    desc_present: bool,
+    desc_len: int,
+    desc_truncated: bool,
+    diag_summary: DiagnosticsSummary | None = None,
+) -> None:
+    """写入 P4 详情采集日志（追加模式，含诊断安全摘要）。
+
+    不记录：
+    - Cookie、手机号、Email、Token、SecurityId、Authorization
+    - userinfo、URL query/fragment
+    - 完整原始 HTML、原始 DOM 片段、完整匹配文本
+    - 描述正文（仅记录是否获取/字符数/是否截断）
+    """
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    duration = (ended_at - started_at).total_seconds()
+
+    lines = [
+        f"========== 详情采集记录 {started_at.isoformat()} ==========",
+        f"开始时间:   {started_at.isoformat()}",
+        f"结束时间:   {ended_at.isoformat()}",
+        f"耗时:       {duration:.1f}s",
+        f"脱敏URL:    {redacted_url}",
+        f"页面类型:   {page_type}",
+        f"结果:       {outcome}",
+        f"描述获取:   {'是' if desc_present else '否'}",
+        f"描述字符数: {desc_len}",
+        f"描述截断:   {'是' if desc_truncated else '否'}",
+    ]
+
+    # 诊断安全摘要（仅字段名与计数，不含页面原文）
+    if diag_summary is not None:
+        lines.append(f"diagnostics_warning_count: {diag_summary.warning_count}")
+        if diag_summary.missing_required_fields:
+            parts = [f"{name}=all_missing" for name in diag_summary.missing_required_fields]
+            lines.append(f"missing_required_fields: {', '.join(parts)}")
+        else:
+            lines.append("missing_required_fields: (none)")
+        lines.append(f"selector_miss_count: {diag_summary.selector_miss_count}")
+        lines.append(f"fallback_count: {diag_summary.fallback_count}")
+
+    lines.append("")
+
+    with open(log_path, "a", encoding="utf-8") as f:
+        f.write("\n".join(lines) + "\n")
+
+    logger.info(
+        "detail 完成: outcome=%s desc_present=%s desc_len=%d truncated=%s duration=%.1fs",
+        outcome,
+        desc_present,
+        desc_len,
+        desc_truncated,
+        duration,
+    )
+
+
+def _write_detail_log_safe(
+    log_path: Path,
+    started_at: datetime,
+    *,
+    redacted_url: str,
+    page_type: str,
+    error_type: str,
+    error_detail: str | None = None,
+    diag_summary: DiagnosticsSummary | None = None,
+) -> None:
+    """详情采集异常路径的安全日志写入。
+
+    只记录错误类型与（可选）脱敏后的细节，不输出异常消息原文
+    （异常消息可能含页面原文）。
+    """
+    ended_at = datetime.now()
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    duration = (ended_at - started_at).total_seconds()
+
+    lines = [
+        f"========== 详情采集记录 {started_at.isoformat()} ==========",
+        f"开始时间:   {started_at.isoformat()}",
+        f"结束时间:   {ended_at.isoformat()}",
+        f"耗时:       {duration:.1f}s",
+        f"脱敏URL:    {redacted_url}",
+        f"页面类型:   {page_type}",
+        f"异常类型:   {error_type}",
+    ]
+    if error_detail is not None:
+        lines.append(f"异常细节:   {error_detail}")
+    if diag_summary is not None:
+        lines.append(f"diagnostics_warning_count: {diag_summary.warning_count}")
+        lines.append(f"selector_miss_count: {diag_summary.selector_miss_count}")
+        lines.append(f"fallback_count: {diag_summary.fallback_count}")
+    lines.append("")
+
+    try:
+        with open(log_path, "a", encoding="utf-8") as f:
+            f.write("\n".join(lines) + "\n")
+    except OSError:
+        # 日志写入失败本身不得导致崩溃；仅记录到 logger
+        logger.warning("详情采集日志写入失败，已忽略")

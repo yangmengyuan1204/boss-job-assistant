@@ -1,4 +1,4 @@
-"""P2 详情页解析器（纯本地，基于 BeautifulSoup）。
+"""P2/P4 详情页解析器（纯本地，基于 BeautifulSoup）。
 
 解析规则：
 - 详情页允许字段缺失
@@ -6,6 +6,11 @@
 - 不做关键词判断、年龄规则判断、劳动强度判断
 - 不做 HTML 原样存储
 - 非岗位详情页拒绝使用详情解析器（调用方应先做页面类型识别）
+
+P4 新增：
+- parse_detail_page_with_diagnostics: 复用 build_detail_diagnostics，
+  避免 collect_runner 自行拼接 Diagnostics
+- Diagnostics 仅含计数/字段名/选择器名/固定警告代码，不含页面原文
 
 本模块不依赖 Playwright，不访问网络。
 """
@@ -16,7 +21,7 @@ import re
 
 from bs4 import BeautifulSoup, Tag
 
-from boss_tool.models.observed_page import ObservedJobDetail
+from boss_tool.models.observed_page import ObservedJobDetail, ParseDiagnostics
 from boss_tool.parsers.sanitization import sanitize_url
 from boss_tool.parsers.selectors import (
     DETAIL_FIELD_SELECTORS,
@@ -202,8 +207,34 @@ def parse_detail_page(
     return detail, field_hits
 
 
+def parse_detail_page_with_diagnostics(
+    html: str,
+    base_url: str | None = None,
+) -> tuple[ObservedJobDetail, ParseDiagnostics]:
+    """解析详情页 HTML 并返回诊断信息。
+
+    P4 新增：复用 P2 build_detail_diagnostics，避免 collect_runner 自行拼接。
+    使用延迟导入避免与 diagnostics 模块的循环导入。
+
+    Args:
+        html: 详情页 HTML 字符串
+        base_url: 基础 URL（用于相对 URL 转换）
+
+    Returns:
+        (detail, diagnostics): 详情对象与解析诊断
+    """
+    # 延迟导入：diagnostics.py 依赖 detail_page.py，避免循环导入
+    from boss_tool.parsers.diagnostics import build_detail_diagnostics
+
+    soup = BeautifulSoup(html, "lxml")
+    detail, field_hits = parse_detail_page(html, base_url=base_url)
+    diagnostics = build_detail_diagnostics(soup, detail, field_hits=field_hits)
+    return detail, diagnostics
+
+
 __all__ = [
     "parse_detail_page",
+    "parse_detail_page_with_diagnostics",
     "find_detail_root",
     "SELECTOR_VERSION",
 ]
