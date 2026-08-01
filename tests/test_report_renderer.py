@@ -282,6 +282,32 @@ class TestDescriptionHandling:
         assert "<!DOCTYPE html>" in html
 
 
+class TestDistanceDisplay:
+    """距离字段显示测试。"""
+
+    def test_distance_present_shows_km(self) -> None:
+        """distance_meter 存在时显示公里数。"""
+        job = _make_job()
+        job.distance_meter = 1500.0
+        html = _render_basic([job])
+        assert "距离：1.50 公里" in html
+
+    def test_distance_none_shows_unknown(self) -> None:
+        """distance_meter 为 None 时显示"距离：未知"。"""
+        job = _make_job()
+        job.distance_meter = None
+        html = _render_basic([job])
+        assert "距离：未知" in html
+        assert "公里" not in html.split("距离：未知")[0].split("<span")[-1]
+
+    def test_distance_zero_shows_zero_km(self) -> None:
+        """distance_meter 为 0 时显示 0.00 公里（边界值）。"""
+        job = _make_job()
+        job.distance_meter = 0.0
+        html = _render_basic([job])
+        assert "距离：0.00 公里" in html
+
+
 class TestSensitiveDataRedaction:
     """敏感数据脱敏测试。"""
 

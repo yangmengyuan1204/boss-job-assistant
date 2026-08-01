@@ -425,6 +425,8 @@ body {
         if job.distance_meter is not None:
             distance_km = job.distance_meter / 1000.0
             meta_parts.append(f"<span>距离：{distance_km:.2f} 公里</span>")
+        else:
+            meta_parts.append('<span class="tag">距离：未知</span>')
         if job.recruiter_active:
             active_cn = (
                 C.ACTIVITY_LEVEL_CN.get(job.recruiter_active_level or "", job.recruiter_active)
