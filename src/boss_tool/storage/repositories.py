@@ -894,11 +894,13 @@ class JobListRepository:
     INSERT INTO job_list (
         job_id, title, salary, company, location,
         experience, education, job_url, company_url,
-        page_no, collected_at
+        page_no, collected_at,
+        normalized_address, longitude, latitude, distance_meter, within_3km
     ) VALUES (
         :job_id, :title, :salary, :company, :location,
         :experience, :education, :job_url, :company_url,
-        :page_no, :collected_at
+        :page_no, :collected_at,
+        :normalized_address, :longitude, :latitude, :distance_meter, :within_3km
     )
     ON CONFLICT(job_id) DO UPDATE SET
         title       = excluded.title,
@@ -910,7 +912,12 @@ class JobListRepository:
         job_url     = excluded.job_url,
         company_url = excluded.company_url,
         page_no     = excluded.page_no,
-        collected_at = excluded.collected_at
+        collected_at = excluded.collected_at,
+        normalized_address = excluded.normalized_address,
+        longitude    = excluded.longitude,
+        latitude     = excluded.latitude,
+        distance_meter = excluded.distance_meter,
+        within_3km   = excluded.within_3km
     """
 
     COUNT_SQL = "SELECT COUNT(*) AS cnt FROM job_list"
@@ -920,7 +927,8 @@ class JobListRepository:
     SELECT_BY_JOB_ID_SQL = """
     SELECT job_id, title, salary, company, location,
            experience, education, job_url, company_url,
-           page_no, collected_at
+           page_no, collected_at,
+           normalized_address, longitude, latitude, distance_meter, within_3km
     FROM job_list
     WHERE job_id = ?
     """
@@ -928,7 +936,8 @@ class JobListRepository:
     SELECT_ALL_SQL = """
     SELECT job_id, title, salary, company, location,
            experience, education, job_url, company_url,
-           page_no, collected_at
+           page_no, collected_at,
+           normalized_address, longitude, latitude, distance_meter, within_3km
     FROM job_list
     ORDER BY id
     """
@@ -993,6 +1002,11 @@ class JobListRepository:
                 "company_url": record.company_url,
                 "page_no": record.page_no,
                 "collected_at": _to_iso(record.collected_at),
+                "normalized_address": record.normalized_address,
+                "longitude": record.longitude,
+                "latitude": record.latitude,
+                "distance_meter": record.distance_meter,
+                "within_3km": _bool_to_int(record.within_3km),
             },
         )
         return outcome
@@ -1090,13 +1104,15 @@ class JobDetailRepository:
         experience, education, employment_type, description,
         company, company_url, company_industry, company_size, company_stage,
         recruiter_name, recruiter_title, recruiter_active,
-        benefits_json, tags_json, collected_at
+        benefits_json, tags_json, collected_at,
+        normalized_address, longitude, latitude, distance_meter, within_3km
     ) VALUES (
         :job_id, :job_url, :title, :salary, :location,
         :experience, :education, :employment_type, :description,
         :company, :company_url, :company_industry, :company_size, :company_stage,
         :recruiter_name, :recruiter_title, :recruiter_active,
-        :benefits_json, :tags_json, :collected_at
+        :benefits_json, :tags_json, :collected_at,
+        :normalized_address, :longitude, :latitude, :distance_meter, :within_3km
     )
     ON CONFLICT(job_id) DO UPDATE SET
         job_url           = excluded.job_url,
@@ -1117,7 +1133,12 @@ class JobDetailRepository:
         recruiter_active  = excluded.recruiter_active,
         benefits_json     = excluded.benefits_json,
         tags_json         = excluded.tags_json,
-        collected_at      = excluded.collected_at
+        collected_at      = excluded.collected_at,
+        normalized_address = excluded.normalized_address,
+        longitude          = excluded.longitude,
+        latitude           = excluded.latitude,
+        distance_meter     = excluded.distance_meter,
+        within_3km         = excluded.within_3km
     """
 
     COUNT_SQL = "SELECT COUNT(*) AS cnt FROM job_detail"
@@ -1129,7 +1150,8 @@ class JobDetailRepository:
            experience, education, employment_type, description,
            company, company_url, company_industry, company_size, company_stage,
            recruiter_name, recruiter_title, recruiter_active,
-           benefits_json, tags_json, collected_at
+           benefits_json, tags_json, collected_at,
+           normalized_address, longitude, latitude, distance_meter, within_3km
     FROM job_detail
     WHERE job_id = ?
     """
@@ -1139,7 +1161,8 @@ class JobDetailRepository:
            experience, education, employment_type, description,
            company, company_url, company_industry, company_size, company_stage,
            recruiter_name, recruiter_title, recruiter_active,
-           benefits_json, tags_json, collected_at
+           benefits_json, tags_json, collected_at,
+           normalized_address, longitude, latitude, distance_meter, within_3km
     FROM job_detail
     ORDER BY id
     """
@@ -1243,6 +1266,11 @@ class JobDetailRepository:
                 "benefits_json": _json_dumps(record.benefits),
                 "tags_json": _json_dumps(record.tags),
                 "collected_at": _to_iso(record.collected_at),
+                "normalized_address": record.normalized_address,
+                "longitude": record.longitude,
+                "latitude": record.latitude,
+                "distance_meter": record.distance_meter,
+                "within_3km": _bool_to_int(record.within_3km),
             },
         )
         return outcome

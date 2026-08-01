@@ -134,6 +134,20 @@ class JobListRecord(BaseModel):
     )
     page_no: int | None = Field(default=None, ge=1, description="采集时的页码（人工指定）")
     collected_at: datetime = Field(default_factory=datetime.now, description="采集时间 ISO-8601")
+    # ===== P5 地理字段（允许为空，不参与 UPSERT 三态判断）=====
+    normalized_address: str | None = Field(
+        default=None, description="标准化地址（P5 地址标准化后）"
+    )
+    longitude: float | None = Field(
+        default=None, ge=-180.0, le=180.0, description="经度（P5 地理编码）"
+    )
+    latitude: float | None = Field(
+        default=None, ge=-90.0, le=90.0, description="纬度（P5 地理编码）"
+    )
+    distance_meter: float | None = Field(
+        default=None, ge=0.0, description="与中心点直线距离（米，P5 距离计算）"
+    )
+    within_3km: bool | None = Field(default=None, description="是否在 3 公里内（P5 距离筛选）")
 
     @field_validator("job_id")
     @classmethod

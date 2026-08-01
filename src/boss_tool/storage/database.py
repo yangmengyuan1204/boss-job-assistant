@@ -37,7 +37,7 @@ logger = get_logger(__name__)
 Migration = Callable[[sqlite3.Connection], None]
 
 # 当前 schema 版本（必须与 MIGRATIONS 中最高版本一致）
-CURRENT_SCHEMA_VERSION = 3
+CURRENT_SCHEMA_VERSION = 4
 
 
 # ==================== V1 Schema DDL ====================
@@ -373,12 +373,93 @@ def migration_v3_job_detail(conn: sqlite3.Connection) -> None:
     conn.executescript(SCHEMA_V3_JOB_DETAIL)
 
 
+# ==================== V4 Schema DDL ====================
+SCHEMA_V4_GEO_CACHE = """
+CREATE TABLE IF NOT EXISTS geo_cache (
+    address             TEXT PRIMARY KEY,
+    normalized_address  TEXT,
+    longitude           REAL,
+    latitude            REAL,
+    provider            TEXT,
+    status              TEXT NOT NULL,
+    created_at          TEXT NOT NULL,
+    updated_at          TEXT NOT NULL,
+    CHECK (status IN ('success', 'failed'))
+);
+CREATE INDEX IF NOT EXISTS idx_geo_cache_normalized ON geo_cache(normalized_address);
+CREATE INDEX IF NOT EXISTS idx_geo_cache_status     ON geo_cache(status);
+"""
+
+
+def _table_columns(conn: sqlite3.Connection, table_name: str) -> set[str]:
+    """获取表的所有列名（用于迁移时检查列是否已存在）。
+
+    SQLite 不支持 ALTER TABLE ADD COLUMN IF NOT EXISTS，
+    需要先检查列是否存在再决定是否 ADD COLUMN。
+    """
+    rows = conn.execute(f"PRAGMA table_info({table_name})").fetchall()
+    return {row["name"] for row in rows}
+
+
+def migration_v4_geo(conn: sqlite3.Connection) -> None:
+    """V4 迁移：新增 geo_cache 表，并给 job_list / job_detail 增加地理字段列。
+
+    新增表：
+    - geo_cache: 地理编码缓存（P5）
+
+    新增列（job_list）：
+    - normalized_address TEXT
+    - longitude REAL
+    - latitude REAL
+    - distance_meter REAL
+    - within_3km INTEGER
+
+    新增列（job_detail）：
+    - 同 job_list
+
+    所有新增列均允许为空，不影响现有 UPSERT 三态判断。
+    不破坏 V1-V3 已有表结构与数据。
+    """
+    # 1. 新增 geo_cache 表
+    conn.executescript(SCHEMA_V4_GEO_CACHE)
+
+    # 2. job_list 增加地理列
+    job_list_cols = _table_columns(conn, "job_list")
+    _add_column_if_missing(conn, "job_list", job_list_cols, "normalized_address", "TEXT")
+    _add_column_if_missing(conn, "job_list", job_list_cols, "longitude", "REAL")
+    _add_column_if_missing(conn, "job_list", job_list_cols, "latitude", "REAL")
+    _add_column_if_missing(conn, "job_list", job_list_cols, "distance_meter", "REAL")
+    _add_column_if_missing(conn, "job_list", job_list_cols, "within_3km", "INTEGER")
+
+    # 3. job_detail 增加地理列
+    job_detail_cols = _table_columns(conn, "job_detail")
+    _add_column_if_missing(conn, "job_detail", job_detail_cols, "normalized_address", "TEXT")
+    _add_column_if_missing(conn, "job_detail", job_detail_cols, "longitude", "REAL")
+    _add_column_if_missing(conn, "job_detail", job_detail_cols, "latitude", "REAL")
+    _add_column_if_missing(conn, "job_detail", job_detail_cols, "distance_meter", "REAL")
+    _add_column_if_missing(conn, "job_detail", job_detail_cols, "within_3km", "INTEGER")
+
+
+def _add_column_if_missing(
+    conn: sqlite3.Connection,
+    table: str,
+    existing_cols: set[str],
+    column: str,
+    col_type: str,
+) -> None:
+    """如果列不存在则 ADD COLUMN（SQLite 不支持 IF NOT EXISTS）。"""
+    if column not in existing_cols:
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {col_type}")
+        logger.debug("迁移 V4: 已添加列 %s.%s", table, column)
+
+
 # 迁移注册表：版本号 -> 迁移函数。
 # 新增迁移时在此处追加，版本号必须递增。
 MIGRATIONS: dict[int, Migration] = {
     1: migration_v1_initial,
     2: migration_v2_job_list,
     3: migration_v3_job_detail,
+    4: migration_v4_geo,
 }
 
 
@@ -514,4 +595,5 @@ __all__ = [
     "migration_v1_initial",
     "migration_v2_job_list",
     "migration_v3_job_detail",
+    "migration_v4_geo",
 ]

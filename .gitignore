@@ -42,6 +42,10 @@ htmlcov/
 pip-log.txt
 pip-delete-this-directory.txt
 
+# P5 地理编码本地配置（含 API Key，禁止提交）
+config/geo.local.yaml
+config/geo.local.*.yaml
+
 # IDE
 .idea/
 .vscode/

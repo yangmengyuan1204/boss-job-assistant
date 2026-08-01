@@ -837,11 +837,11 @@ class TestDatabaseMigration:
         finally:
             db.close()
 
-    def test_schema_version_is_3(self, tmp_db_path, tmp_workspace) -> None:
-        """初始化后 schema_version == 3。"""
+    def test_schema_version_is_4(self, tmp_db_path, tmp_workspace) -> None:
+        """初始化后 schema_version == 4（P5 新增 V4 geo_cache 迁移）。"""
         db = _new_db(tmp_db_path)
         try:
-            assert db.get_schema_version() == 3
+            assert db.get_schema_version() == 4
         finally:
             db.close()
 
