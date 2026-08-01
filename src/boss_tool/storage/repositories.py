@@ -33,6 +33,7 @@ from boss_tool.models.job_list import BulkUpsertResult, JobListRecord, UpsertOut
 from boss_tool.models.physical import PhysicalIntensityResult
 from boss_tool.models.recruiter import RecruiterInfo
 from boss_tool.models.run import RunRecord
+from boss_tool.rules.models import RuleResult
 
 logger = get_logger(__name__)
 
@@ -1290,6 +1291,135 @@ class JobDetailRepository:
         return self.conn.execute(self.SELECT_ALL_SQL).fetchall()
 
 
+# ==================== RuleEngineRepository ====================
+class RuleEngineRepository:
+    """P6 规则引擎结果 Repository。
+
+    将 RuleResult 持久化到 job_detail 表的规则引擎字段（V5 迁移新增列）。
+
+    设计约束：
+    - 不破坏 GeoRepository / JobRepository / JobListRepository / JobDetailRepository
+    - 仅 UPDATE 已存在的 job_detail 记录（规则结果为详情记录的派生数据）
+    - 若 job_id 不存在则返回 False（不自动创建详情记录）
+    - 不自动 commit；调用方通过 Database.transaction() 或显式 conn.commit() 提交
+    - 规则字段不参与 JobDetailRepository 的 UPSERT 三态判断（BUSINESS_FIELDS 不含规则字段）
+
+    持久化字段（V5 新增列）：
+    - score / recommend_level / job_category
+    - age_requirement_text / age_status / recruiter_active_level
+    - matched_rules_json / failed_rules_json / warnings_json
+    - explanations_json / labor_intensity_tags_json / score_breakdown_json
+    """
+
+    UPDATE_SQL = """
+    UPDATE job_detail SET
+        score                   = :score,
+        recommend_level         = :recommend_level,
+        job_category            = :job_category,
+        age_requirement_text    = :age_requirement_text,
+        age_status              = :age_status,
+        recruiter_active_level  = :recruiter_active_level,
+        matched_rules_json      = :matched_rules_json,
+        failed_rules_json       = :failed_rules_json,
+        warnings_json           = :warnings_json,
+        explanations_json       = :explanations_json,
+        labor_intensity_tags_json = :labor_intensity_tags_json,
+        score_breakdown_json    = :score_breakdown_json
+    WHERE job_id = :job_id
+    """
+
+    EXISTS_SQL = "SELECT 1 FROM job_detail WHERE job_id = ?"
+
+    SELECT_RULE_SQL = """
+    SELECT job_id, score, recommend_level, job_category,
+           age_requirement_text, age_status, recruiter_active_level,
+           matched_rules_json, failed_rules_json, warnings_json,
+           explanations_json, labor_intensity_tags_json, score_breakdown_json
+    FROM job_detail
+    WHERE job_id = ?
+    """
+
+    COUNT_BY_LEVEL_SQL = "SELECT COUNT(*) AS cnt FROM job_detail WHERE recommend_level = ?"
+
+    def __init__(self, conn: sqlite3.Connection):
+        self.conn = conn
+
+    def save_rule_result(self, job_id: str, result: RuleResult) -> bool:
+        """将 RuleResult 持久化到 job_detail 表（UPDATE）。
+
+        Args:
+            job_id: 岗位 ID（必须已存在于 job_detail 表）
+            result: 规则引擎评估结果
+
+        Returns:
+            True 表示更新成功（job_id 存在）；
+            False 表示 job_id 不存在，未更新（不自动创建详情记录）。
+        """
+        # 前置检查：job_id 必须已存在
+        row = self.conn.execute(self.EXISTS_SQL, (job_id,)).fetchone()
+        if row is None:
+            logger.warning("save_rule_result: job_id=%s 在 job_detail 中不存在，跳过", job_id)
+            return False
+
+        params = {"job_id": job_id}
+        params.update(result.to_db_dict())
+        self.conn.execute(self.UPDATE_SQL, params)
+        logger.debug(
+            "save_rule_result: job_id=%s score=%s level=%s category=%s",
+            job_id,
+            result.score,
+            result.recommend_level,
+            result.job_category,
+        )
+        return True
+
+    def get_rule_result(self, job_id: str) -> RuleResult | None:
+        """从 job_detail 表读取规则引擎结果。
+
+        Args:
+            job_id: 岗位 ID
+
+        Returns:
+            RuleResult 实例；若 job_id 不存在或规则字段均为空则返回 None。
+        """
+        row = self.conn.execute(self.SELECT_RULE_SQL, (job_id,)).fetchone()
+        if row is None:
+            return None
+        # 规则字段均为空表示未评估过
+        if row["score"] is None and row["recommend_level"] is None:
+            return None
+        return self._row_to_rule_result(row)
+
+    def count_by_level(self, recommend_level: str) -> int:
+        """按推荐等级统计岗位数量。"""
+        row = self.conn.execute(self.COUNT_BY_LEVEL_SQL, (recommend_level,)).fetchone()
+        return int(row["cnt"])
+
+    @staticmethod
+    def _row_to_rule_result(row: sqlite3.Row) -> RuleResult:
+        """从数据库行恢复 RuleResult。
+
+        JSON 字段反序列化为列表/字典。空 JSON 视为空列表/空字典。
+        """
+        from boss_tool.enums import ActivityCategory
+
+        return RuleResult(
+            score=int(row["score"]) if row["score"] is not None else 0,
+            recommend_level=row["recommend_level"] or "D",
+            job_category=row["job_category"] or "其他",
+            age_requirement_text=row["age_requirement_text"],
+            age_status=row["age_status"] or "unknown",
+            recruiter_active_level=row["recruiter_active_level"] or ActivityCategory.UNKNOWN.value,
+            distance_meter=None,  # 距离不持久化在规则字段中，由 job_detail 地理列承载
+            matched_rules=_json_loads(row["matched_rules_json"]) or [],
+            failed_rules=_json_loads(row["failed_rules_json"]) or [],
+            warnings=_json_loads(row["warnings_json"]) or [],
+            explanations=_json_loads(row["explanations_json"]) or [],
+            labor_intensity_tags=_json_loads(row["labor_intensity_tags_json"]) or [],
+            score_breakdown=_json_loads(row["score_breakdown_json"]) or {},
+        )
+
+
 __all__ = [
     "JobRepository",
     "CollectionMetaRepository",
@@ -1297,4 +1427,5 @@ __all__ = [
     "GeocodeCacheRepository",
     "JobListRepository",
     "JobDetailRepository",
+    "RuleEngineRepository",
 ]

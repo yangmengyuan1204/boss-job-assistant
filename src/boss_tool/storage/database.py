@@ -37,7 +37,7 @@ logger = get_logger(__name__)
 Migration = Callable[[sqlite3.Connection], None]
 
 # 当前 schema 版本（必须与 MIGRATIONS 中最高版本一致）
-CURRENT_SCHEMA_VERSION = 4
+CURRENT_SCHEMA_VERSION = 5
 
 
 # ==================== V1 Schema DDL ====================
@@ -453,6 +453,66 @@ def _add_column_if_missing(
         logger.debug("迁移 V4: 已添加列 %s.%s", table, column)
 
 
+# ==================== V5 Schema DDL ====================
+# P6 规则引擎字段追加到 job_detail 表。
+# 设计原因：
+# - 规则引擎输入依赖详情页字段（title/description/tags/recruiter_active/salary），
+#   job_list 仅含列表页字段（无 description/tags/recruiter_active），不足以评估
+# - 规则结果与详情记录自然关联，放 job_detail 避免跨表 JOIN
+# - 不新增复杂表：规则结果是详情记录的派生数据，非独立实体
+# - 新增列均允许为空，不影响 P4 UPSERT 三态判断（BUSINESS_FIELDS 不含规则字段）
+SCHEMA_V5_RULE_INDICES = """
+CREATE INDEX IF NOT EXISTS idx_job_detail_rule_level    ON job_detail(recommend_level);
+CREATE INDEX IF NOT EXISTS idx_job_detail_rule_category ON job_detail(job_category);
+CREATE INDEX IF NOT EXISTS idx_job_detail_rule_score    ON job_detail(score);
+"""
+
+# V5 新增列定义（列名, 类型）
+_V5_RULE_COLUMNS: tuple[tuple[str, str], ...] = (
+    ("score", "INTEGER"),
+    ("recommend_level", "TEXT"),
+    ("job_category", "TEXT"),
+    ("age_requirement_text", "TEXT"),
+    ("age_status", "TEXT"),
+    ("recruiter_active_level", "TEXT"),
+    ("matched_rules_json", "TEXT"),
+    ("failed_rules_json", "TEXT"),
+    ("warnings_json", "TEXT"),
+    ("explanations_json", "TEXT"),
+    ("labor_intensity_tags_json", "TEXT"),
+    ("score_breakdown_json", "TEXT"),
+)
+
+
+def migration_v5_rule_engine(conn: sqlite3.Connection) -> None:
+    """V5 迁移：job_detail 表新增规则引擎字段。
+
+    新增列（job_detail）：
+    - score INTEGER               规则引擎总分（0..100）
+    - recommend_level TEXT        推荐等级（A/B/C/D）
+    - job_category TEXT           岗位分类（保洁/保安/门卫/宿管/绿化/环卫/其他）
+    - age_requirement_text TEXT   年龄要求原文
+    - age_status TEXT             年龄状态枚举值
+    - recruiter_active_level TEXT 招聘者活跃等级枚举值
+    - matched_rules_json TEXT     命中规则 ID 列表（JSON）
+    - failed_rules_json TEXT      未命中规则 ID 列表（JSON）
+    - warnings_json TEXT          警告列表（JSON）
+    - explanations_json TEXT      固定解释文本列表（JSON）
+    - labor_intensity_tags_json TEXT 命中劳动强度关键字列表（JSON）
+    - score_breakdown_json TEXT   各项得分明细（JSON）
+
+    所有新增列允许为空，不影响现有 UPSERT 三态判断。
+    不破坏 V1-V4 已有表结构与数据。
+    新增索引便于按推荐等级/岗位分类/分数筛选。
+    """
+    job_detail_cols = _table_columns(conn, "job_detail")
+    for column, col_type in _V5_RULE_COLUMNS:
+        _add_column_if_missing(conn, "job_detail", job_detail_cols, column, col_type)
+
+    # 新增索引（IF NOT EXISTS 幂等）
+    conn.executescript(SCHEMA_V5_RULE_INDICES)
+
+
 # 迁移注册表：版本号 -> 迁移函数。
 # 新增迁移时在此处追加，版本号必须递增。
 MIGRATIONS: dict[int, Migration] = {
@@ -460,6 +520,7 @@ MIGRATIONS: dict[int, Migration] = {
     2: migration_v2_job_list,
     3: migration_v3_job_detail,
     4: migration_v4_geo,
+    5: migration_v5_rule_engine,
 }
 
 
@@ -596,4 +657,5 @@ __all__ = [
     "migration_v2_job_list",
     "migration_v3_job_detail",
     "migration_v4_geo",
+    "migration_v5_rule_engine",
 ]

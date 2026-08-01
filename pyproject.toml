@@ -80,7 +80,7 @@ skip_covered = false
 [tool.ruff]
 line-length = 100
 target-version = "py310"
-extend-exclude = ["user_data", "logs", "output", "data", "_diag", "_env_diag.py", "_run_tests.py"]
+extend-exclude = ["user_data", "logs", "output", "data", "_diag", "_env_diag.py", "_run_tests.py", "_p5_*.py", "_p6_*.py", "p5_test_result.txt"]
 
 [tool.ruff.lint]
 select = [
@@ -105,6 +105,7 @@ ignore = [
 "tests/*" = ["B017"]  # 测试允许 Exception 通用匹配
 "src/boss_tool/cli.py" = ["B008"]  # typer Option 默认参数
 "src/boss_tool/storage/repositories.py" = ["SIM118", "SIM401"]  # sqlite3.Row 无 .get()，需 .keys() 显式查找
+"tests/test_rule_engine_repository.py" = ["SIM401"]  # sqlite3.Row 无 .get()，需 if/in 模式
 
 [tool.ruff.lint.isort]
 known-first-party = ["boss_tool"]
