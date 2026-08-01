@@ -674,6 +674,54 @@ def collect_current_page(
     )
 
 
+# ==================== P7: 离线 HTML 报告生成 ====================
+@app.command(name="generate-report")
+def generate_report(
+    config_dir: Path | None = typer.Option(None, "--config-dir", "-c", help="配置目录"),
+    output: Path | None = typer.Option(
+        None,
+        "--output",
+        "-o",
+        help="输出 HTML 文件路径（默认 output_dir/report.html）",
+    ),
+    db_path: Path | None = typer.Option(
+        None,
+        "--db-path",
+        help="SQLite 数据库路径（默认从配置推导）",
+    ),
+    open_browser: bool = typer.Option(
+        False,
+        "--open",
+        help="生成后用系统默认浏览器打开（仅打开本地文件，不导航到在线页面）",
+    ),
+) -> None:
+    """P7: 生成离线 HTML 岗位报告（只读 SQLite，不访问网络）。
+
+    流程：
+    1. 加载配置（可选；失败时降级使用默认常量）
+    2. 打开 SQLite 只读连接（mode=ro）
+    3. 查询 job_list + job_detail 聚合数据
+    4. 7 级优先级排序 + 四分区分类
+    5. 渲染单文件 HTML（内联 CSS/JS，html.escape + sanitize_url）
+    6. 保存到输出路径
+
+    安全规则：
+    - 只读 SQLite，不执行任何写操作
+    - 不访问网络（离线运行）
+    - 不依赖 LLM / 机器学习
+    - 所有动态内容 html.escape 转义
+    - 所有链接 sanitize_url 校验
+    """
+    from boss_tool.report.runner import run_generate_report
+
+    run_generate_report(
+        config_dir=config_dir,
+        output=output,
+        db_path=db_path,
+        open_browser=open_browser,
+    )
+
+
 # ==================== 工具函数 ====================
 def _check_writable(test_file: Path) -> None:
     """检查目录可写。"""
