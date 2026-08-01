@@ -51,9 +51,8 @@ class TestNoNetwork:
             for node in ast.walk(tree):
                 if isinstance(node, ast.Import):
                     for alias in node.names:
-                        assert "playwright" not in alias.name.lower(), (
-                            f"{mod.__name__} 直接导入了 playwright"
-                        )
+                        msg = f"{mod.__name__} 直接导入了 playwright"
+                        assert "playwright" not in alias.name.lower(), msg
                 elif (
                     isinstance(node, ast.ImportFrom)
                     and node.module

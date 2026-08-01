@@ -104,6 +104,7 @@ ignore = [
 [tool.ruff.lint.per-file-ignores]
 "tests/*" = ["B017"]  # 测试允许 Exception 通用匹配
 "src/boss_tool/cli.py" = ["B008"]  # typer Option 默认参数
+"src/boss_tool/storage/repositories.py" = ["SIM118", "SIM401"]  # sqlite3.Row 无 .get()，需 .keys() 显式查找
 
 [tool.ruff.lint.isort]
 known-first-party = ["boss_tool"]

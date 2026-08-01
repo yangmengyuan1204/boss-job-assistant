@@ -501,7 +501,7 @@ def _run_command_loop(
             s = manager.session
             if s is not None:
                 typer.echo(f"  session_id:          {s.session_id}")
-                typer.echo(f"  state:               {s.state}")
+                typer.echo(f"  state:               {s.state.value}")
                 typer.echo(f"  user_confirmed:      {s.user_confirmed}")
                 typer.echo(f"  browser_closed_by_user: {s.browser_closed_by_user}")
                 typer.echo(f"  close_source:        {s.close_source}")

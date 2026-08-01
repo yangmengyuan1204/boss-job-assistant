@@ -771,13 +771,11 @@ class TestNoAntiDetection:
         for node in ast.walk(tree):
             if isinstance(node, ast.Import):
                 for alias in node.names:
-                    assert alias.name != "playwright_stealth", (
-                        f"禁止 import playwright_stealth (line {node.lineno})"
-                    )
+                    msg = f"禁止 import playwright_stealth (line {node.lineno})"
+                    assert alias.name != "playwright_stealth", msg
             elif isinstance(node, ast.ImportFrom):
-                assert node.module != "playwright_stealth", (
-                    f"禁止 from playwright_stealth import ... (line {node.lineno})"
-                )
+                msg = f"禁止 from playwright_stealth import ... (line {node.lineno})"
+                assert node.module != "playwright_stealth", msg
 
         # 2. 不应调用 stealth() 函数
         for node in ast.walk(tree):

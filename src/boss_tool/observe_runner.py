@@ -235,7 +235,7 @@ def _handle_status(manager: BrowserManager) -> None:
     s = manager.session
     if s is not None:
         typer.echo(f"  session_id:    {s.session_id}")
-        typer.echo(f"  state:         {s.state}")
+        typer.echo(f"  state:         {s.state.value}")
         typer.echo(f"  user_confirmed: {s.user_confirmed}")
 
     observer = _get_observer(manager)

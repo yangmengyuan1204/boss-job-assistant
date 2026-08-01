@@ -950,7 +950,7 @@ class JobListRepository:
         """
         for field in JobListRepository.BUSINESS_FIELDS:
             new_val = getattr(record, field)
-            old_val = existing[field] if field in existing.keys() else None  # noqa: SIM118, SIM401 (sqlite3.Row 无 .get())
+            old_val = existing[field] if field in existing.keys() else None
             # 规范化：None / "" 统一为 None 比较
             new_norm = new_val if new_val not in (None, "") else None
             old_norm = old_val if old_val not in (None, "") else None
@@ -1188,13 +1188,13 @@ class JobDetailRepository:
                 # 列表字段：从 record 序列化为 JSON，与数据库中已有的 JSON 比较
                 list_attr = field.replace("_json", "")
                 new_val = _json_dumps(getattr(record, list_attr))
-                old_val = existing[field] if field in existing.keys() else None  # noqa: SIM118, SIM401
+                old_val = existing[field] if field in existing.keys() else None
                 if cls._normalize_list_json(new_val) != cls._normalize_list_json(old_val):
                     return False
             else:
                 # 标量字段
                 new_val = getattr(record, field)
-                old_val = existing[field] if field in existing.keys() else None  # noqa: SIM118, SIM401
+                old_val = existing[field] if field in existing.keys() else None
                 if cls._normalize_scalar(new_val) != cls._normalize_scalar(old_val):
                     return False
         return True
